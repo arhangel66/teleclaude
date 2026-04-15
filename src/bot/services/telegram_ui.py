@@ -88,7 +88,7 @@ class TelegramUI:
     ) -> None:
         """Send final response as new message(s) with context size footer."""
         if context_tokens > 0:
-            full_text = f"{text}\n\n· {_format_tokens(context_tokens)}"
+            full_text = f"{text} ({_format_tokens(context_tokens)})"
         else:
             full_text = text
         await self._send_long(chat_id, full_text)

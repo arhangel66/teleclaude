@@ -94,6 +94,8 @@ async def on_message(message: types.Message) -> None:
         return
 
     session_id = await session_store.get(chat_id)
+    if session_id is None:
+        prompt = f"[chat_id={chat_id}]\n\n{prompt}"
     progress = ProgressTracker(telegram_ui, chat_id)
 
     await telegram_ui.start_typing(chat_id)

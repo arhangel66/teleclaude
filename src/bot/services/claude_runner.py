@@ -30,6 +30,12 @@ class ResultEvent:
     context_tokens: int
 
 
+@dataclass
+class _AssistantUsage:
+    """Internal: carries usage from an assistant event; not yielded to callers."""
+    tokens: int
+
+
 Event = SystemEvent | TextEvent | ToolUseEvent | ResultEvent
 
 
@@ -76,8 +82,14 @@ class ClaudeRunner:
         try:
             assert proc.stdout is not None
             event_count = 0
+            last_assistant_tokens = 0
             async for event in self._parse_stream(proc.stdout):
                 event_count += 1
+                if isinstance(event, _AssistantUsage):
+                    last_assistant_tokens = event.tokens
+                    continue
+                if isinstance(event, ResultEvent) and last_assistant_tokens:
+                    event = ResultEvent(text=event.text, context_tokens=last_assistant_tokens)
                 logger.info("Event #%d: %s", event_count, event)
                 yield event
 
@@ -122,27 +134,38 @@ class ClaudeRunner:
                 continue
 
             logger.debug("Raw JSON: %s", text[:500])
-            event = self._parse_event(data)
-            if event:
-                yield event
+            events = self._parse_event(data)
+            if events:
+                for event in events:
+                    yield event
             else:
                 logger.debug("Unhandled event type: %s", data.get("type"))
 
-    def _parse_event(self, data: dict) -> Event | None:
+    def _parse_event(self, data: dict) -> list[Event]:
         event_type = data.get("type")
 
         if event_type == "system":
             session_id = data.get("session_id", "")
             if session_id:
-                return SystemEvent(session_id=session_id)
+                return [SystemEvent(session_id=session_id)]
 
         elif event_type == "assistant":
             message = data.get("message", {})
+            out: list[Event] = []
+            usage = message.get("usage", {})
+            tokens = (
+                usage.get("input_tokens", 0)
+                + usage.get("cache_read_input_tokens", 0)
+                + usage.get("cache_creation_input_tokens", 0)
+            )
+            if tokens:
+                out.append(_AssistantUsage(tokens=tokens))
             for block in message.get("content", []):
                 if block.get("type") == "text":
-                    return TextEvent(text=block["text"])
-                if block.get("type") == "tool_use":
-                    return ToolUseEvent(tool_name=block.get("name", "tool"))
+                    out.append(TextEvent(text=block["text"]))
+                elif block.get("type") == "tool_use":
+                    out.append(ToolUseEvent(tool_name=block.get("name", "tool")))
+            return out
 
         elif event_type == "result":
             result_text = data.get("result", "").strip()
@@ -152,6 +175,6 @@ class ClaudeRunner:
                 + usage.get("cache_read_input_tokens", 0)
                 + usage.get("cache_creation_input_tokens", 0)
             )
-            return ResultEvent(text=result_text, context_tokens=context_tokens)
+            return [ResultEvent(text=result_text, context_tokens=context_tokens)]
 
-        return None
+        return []
