@@ -133,6 +133,10 @@ async def on_message(message: types.Message) -> None:
 
     renderer = build_renderer(settings.streaming_mode, telegram_ui, chat_id)
 
+    if prompt.startswith("/"):
+        command = prompt.split(maxsplit=1)[0]
+        await renderer.on_tool("Command", {"command": command})
+
     try:
         await run_prompt(
             chat_id,
