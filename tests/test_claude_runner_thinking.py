@@ -59,8 +59,34 @@ def test_parse_mixed_blocks_preserves_order() -> None:
     ]
     assert isinstance(events[1], ToolUseEvent)
     assert events[1].tool_name == "Read"
+    assert events[1].tool_input == {}
     assert isinstance(events[2], TextEvent)
     assert events[2].text == "done"
+
+
+def test_parse_tool_use_carries_input() -> None:
+    # Arrange
+    data = {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "Read",
+                    "input": {"file_path": "/tmp/x.py"},
+                }
+            ],
+            "usage": {},
+        },
+    }
+
+    # Act
+    events = _runner()._parse_event(data)
+
+    # Assert
+    tool = next(e for e in events if isinstance(e, ToolUseEvent))
+    assert tool.tool_name == "Read"
+    assert tool.tool_input == {"file_path": "/tmp/x.py"}
 
 
 def test_parse_empty_thinking_is_skipped() -> None:

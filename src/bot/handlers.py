@@ -13,13 +13,7 @@ from src.bot.construct import (
     telegram_ui,
     transcriber,
 )
-from src.bot.services.claude_runner import (
-    ResultEvent,
-    SystemEvent,
-    TextEvent,
-    ThinkingEvent,
-    ToolUseEvent,
-)
+from src.bot.services.task_runner import run_prompt
 from src.bot.services.telegram_ui import CANCEL_CALLBACK_PREFIX, build_renderer
 from src.bot.services.transcriber import TranscriptionError
 
@@ -137,34 +131,22 @@ async def on_message(message: types.Message) -> None:
         await message.answer("Claude is still processing your previous message.")
         return
 
-    session_id = await session_store.get(chat_id)
-    if session_id is None:
-        prompt = f"[chat_id={chat_id}]\n\n{prompt}"
-
     renderer = build_renderer(settings.streaming_mode, telegram_ui, chat_id)
 
-    await telegram_ui.start_typing(chat_id)
     try:
-        async for event in claude_runner.run(prompt, chat_id, session_id):
-            if isinstance(event, SystemEvent):
-                await session_store.set(chat_id, event.session_id)
-            elif isinstance(event, TextEvent):
-                await renderer.on_text(event.text)
-            elif isinstance(event, ToolUseEvent):
-                await renderer.on_tool(event.tool_name)
-            elif isinstance(event, ThinkingEvent):
-                await renderer.on_thinking(event.text)
-            elif isinstance(event, ResultEvent):
-                logger.info("Got result, sending final (%d tokens)", event.context_tokens)
-                await renderer.finish()
-                await telegram_ui.send_final(chat_id, event.text, event.context_tokens)
-                logger.info("Final message sent")
+        await run_prompt(
+            chat_id,
+            prompt,
+            claude_runner=claude_runner,
+            session_store=session_store,
+            ui=telegram_ui,
+            deliver="final",
+            start_typing=True,
+            renderer=renderer,
+        )
     except Exception:
-        logger.exception("Error processing message for chat_id=%d", chat_id)
-        await renderer.cleanup()
+        # run_prompt already logs; surface to the user so they aren't left hanging.
         await telegram_ui.send_text(chat_id, "Error processing your message.")
-    finally:
-        await telegram_ui.stop_typing(chat_id)
 
 
 @router.callback_query(lambda cb: cb.data and cb.data.startswith(CANCEL_CALLBACK_PREFIX))

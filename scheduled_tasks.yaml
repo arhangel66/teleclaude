@@ -1,0 +1,13 @@
+- name: daily_standup
+  schedule: "0 7 * * *"
+  timezone: Asia/Tbilisi
+  prompt: "/daily-standup"
+  target: primary
+  deliver: final
+
+- name: nightly_compact
+  schedule: "0 3 * * *"
+  timezone: Asia/Tbilisi
+  prompt: "/compact"
+  target: all_sessions
+  deliver: silent

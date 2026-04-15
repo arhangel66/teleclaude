@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ class TextEvent:
 @dataclass
 class ToolUseEvent:
     tool_name: str
+    tool_input: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -170,7 +171,10 @@ class ClaudeRunner:
                 if block_type == "text":
                     out.append(TextEvent(text=block.get("text", "")))
                 elif block_type == "tool_use":
-                    out.append(ToolUseEvent(tool_name=block.get("name", "tool")))
+                    out.append(ToolUseEvent(
+                        tool_name=block.get("name", "tool"),
+                        tool_input=block.get("input") or {},
+                    ))
                 elif block_type == "thinking":
                     thinking_text = block.get("thinking") or block.get("text") or ""
                     if thinking_text:

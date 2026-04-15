@@ -31,6 +31,14 @@ class SessionStore:
         )
         await self._db.commit()
 
+    async def list_chats(self) -> list[int]:
+        assert self._db is not None
+        async with self._db.execute(
+            "SELECT chat_id FROM sessions WHERE session_id != '' ORDER BY chat_id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
+
     async def reset(self, chat_id: int) -> None:
         assert self._db is not None
         await self._db.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))

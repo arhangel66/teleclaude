@@ -3,7 +3,7 @@ import logging
 
 from aiogram import Dispatcher
 
-from src.bot.construct import bot, session_store
+from src.bot.construct import bot, session_store, task_scheduler
 from src.bot.handlers import router
 
 logging.basicConfig(
@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 async def main() -> None:
     await session_store.init()
+    task_scheduler.start()
 
     dp = Dispatcher()
     dp.include_router(router)
@@ -25,6 +26,7 @@ async def main() -> None:
     try:
         await dp.start_polling(bot)
     finally:
+        await task_scheduler.stop()
         await session_store.close()
         await bot.session.close()
 

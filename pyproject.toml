@@ -6,8 +6,10 @@ requires-python = ">=3.13"
 dependencies = [
     "aiogram>=3.27.0",
     "aiosqlite>=0.22.1",
+    "apscheduler>=3.11.2",
     "httpx>=0.28.1",
     "pydantic-settings>=2.13.1",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]

@@ -7,6 +7,8 @@ from src.bot.services.telegram_ui import (
     QuietRenderer,
     TelegramUI,
     VerboseRenderer,
+    _format_tool_detail,
+    _format_tool_line,
     build_renderer,
 )
 
@@ -116,7 +118,7 @@ async def test_compact_uses_single_message_edits(
 
     # Assert — exactly one send_message (initial progress), subsequent events edit
     assert bot.send_calls == 1
-    assert bot.delete_calls == 1  # progress message deleted on finish
+    assert bot.delete_calls == 0  # finish() no longer deletes; on_final does
 
 
 @pytest.mark.asyncio
@@ -125,7 +127,7 @@ async def test_quiet_sends_nothing_during_stream(
 ) -> None:
     # Arrange
     ui, bot = counting_ui
-    renderer = QuietRenderer()
+    renderer = QuietRenderer(ui, chat_id=42)
     events = [
         ("text", "hello"),
         ("tool", "Read"),
@@ -141,6 +143,90 @@ async def test_quiet_sends_nothing_during_stream(
 
 
 @pytest.mark.asyncio
+async def test_quiet_on_final_sends_message(
+    counting_ui: tuple[TelegramUI, _CountingBot],
+) -> None:
+    # Arrange
+    ui, bot = counting_ui
+    renderer = QuietRenderer(ui, chat_id=42)
+
+    # Act
+    await renderer.on_final("hello", 0)
+
+    # Assert
+    assert bot.send_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_verbose_on_final_dedupes_when_last_is_same_text(
+    counting_ui: tuple[TelegramUI, _CountingBot],
+) -> None:
+    # Arrange
+    ui, bot = counting_ui
+    renderer = VerboseRenderer(ui, chat_id=42)
+
+    # Act
+    await renderer.on_text("done")
+    send_calls_before = bot.send_calls
+    await renderer.on_final("done", 2500)
+
+    # Assert — no new message, just edit-in-place
+    assert bot.send_calls == send_calls_before
+    assert bot.edit_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_verbose_on_final_sends_new_when_last_is_not_text(
+    counting_ui: tuple[TelegramUI, _CountingBot],
+) -> None:
+    # Arrange
+    ui, bot = counting_ui
+    renderer = VerboseRenderer(ui, chat_id=42)
+
+    # Act
+    await renderer.on_tool("Read", {"file_path": "/a.py"})
+    send_calls_before = bot.send_calls
+    await renderer.on_final("hello", 100)
+
+    # Assert — new final message sent
+    assert bot.send_calls == send_calls_before + 1
+
+
+@pytest.mark.asyncio
+async def test_verbose_on_final_sends_new_when_text_differs(
+    counting_ui: tuple[TelegramUI, _CountingBot],
+) -> None:
+    # Arrange
+    ui, bot = counting_ui
+    renderer = VerboseRenderer(ui, chat_id=42)
+
+    # Act
+    await renderer.on_text("streaming text")
+    send_calls_before = bot.send_calls
+    await renderer.on_final("final text", 100)
+
+    # Assert — final text differs, must send new message
+    assert bot.send_calls == send_calls_before + 1
+
+
+@pytest.mark.asyncio
+async def test_compact_on_final_deletes_progress_and_sends(
+    counting_ui: tuple[TelegramUI, _CountingBot],
+) -> None:
+    # Arrange
+    ui, bot = counting_ui
+    renderer = CompactRenderer(ui, chat_id=42)
+
+    # Act
+    await renderer.on_text("streaming")
+    await renderer.on_final("final result", 500)
+
+    # Assert — 1 progress send + 1 final send, progress deleted
+    assert bot.send_calls == 2
+    assert bot.delete_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_build_renderer_maps_modes() -> None:
     # Arrange
     ui = MagicMock()
@@ -149,6 +235,40 @@ async def test_build_renderer_maps_modes() -> None:
     assert isinstance(build_renderer("verbose", ui, 1), VerboseRenderer)
     assert isinstance(build_renderer("compact", ui, 1), CompactRenderer)
     assert isinstance(build_renderer("quiet", ui, 1), QuietRenderer)
+
+
+def test_format_tool_detail_picks_known_key() -> None:
+    # Arrange / Act / Assert
+    assert _format_tool_detail("Read", {"file_path": "/a/b.py"}) == "/a/b.py"
+    assert _format_tool_detail("Bash", {"description": "run tests", "command": "pytest"}) == "run tests"
+    assert _format_tool_detail("Bash", {"command": "pytest -v"}) == "pytest -v"
+    assert _format_tool_detail("Grep", {"pattern": "foo"}) == "foo"
+    assert _format_tool_detail("Unknown", {"path": "/x"}) == "/x"
+
+
+def test_format_tool_detail_truncates_long_values() -> None:
+    # Arrange
+    long = "a" * 200
+
+    # Act
+    detail = _format_tool_detail("Bash", {"command": long})
+
+    # Assert
+    assert detail.endswith("…")
+    assert len(detail) <= 100
+
+
+def test_format_tool_detail_handles_missing_input() -> None:
+    # Arrange / Act / Assert
+    assert _format_tool_detail("Read", None) == ""
+    assert _format_tool_detail("Read", {}) == ""
+
+
+def test_format_tool_line_includes_detail() -> None:
+    # Arrange / Act / Assert
+    assert _format_tool_line("Read", {"file_path": "/a.py"}) == "⚙ Read: /a.py"
+    assert _format_tool_line("Read", None) == "⚙ Read"
+    assert _format_tool_line("Read", {"file_path": "/a.py"}, suffix="...") == "⚙ Read: /a.py..."
 
 
 def test_build_renderer_rejects_unknown_mode() -> None:

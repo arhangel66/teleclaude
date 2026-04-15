@@ -16,6 +16,47 @@ CANCEL_CALLBACK_PREFIX = "cancel:"
 TOOL_PREFIX = "⚙ "
 THINKING_PREFIX = "🧠 "
 
+MAX_TOOL_DETAIL_LEN = 100
+
+_TOOL_DETAIL_KEYS: dict[str, tuple[str, ...]] = {
+    "Read": ("file_path",),
+    "Edit": ("file_path",),
+    "Write": ("file_path",),
+    "NotebookEdit": ("notebook_path", "file_path"),
+    "Bash": ("description", "command"),
+    "Grep": ("pattern",),
+    "Glob": ("pattern",),
+    "Task": ("description",),
+    "WebFetch": ("url",),
+    "WebSearch": ("query",),
+    "TodoWrite": (),
+}
+
+_DEFAULT_DETAIL_KEYS = (
+    "file_path", "path", "pattern", "query", "description", "command", "url",
+)
+
+
+def _format_tool_detail(tool_name: str, tool_input: dict | None) -> str:
+    """Pick a short, human-readable detail from a tool's input payload."""
+    if not tool_input:
+        return ""
+    keys = _TOOL_DETAIL_KEYS.get(tool_name, _DEFAULT_DETAIL_KEYS)
+    for key in keys:
+        value = tool_input.get(key)
+        if value:
+            text = str(value).replace("\n", " ").strip()
+            if len(text) > MAX_TOOL_DETAIL_LEN:
+                text = text[: MAX_TOOL_DETAIL_LEN - 1] + "…"
+            return text
+    return ""
+
+
+def _format_tool_line(tool_name: str, tool_input: dict | None, *, suffix: str = "") -> str:
+    detail = _format_tool_detail(tool_name, tool_input)
+    body = f"{tool_name}: {detail}" if detail else tool_name
+    return f"{TOOL_PREFIX}{body}{suffix}"
+
 
 def _cancel_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -89,6 +130,19 @@ class TelegramUI:
         msg = await self._bot.send_message(chat_id, truncated, reply_markup=reply_markup)
         return msg.message_id
 
+    async def edit_plain(
+        self, chat_id: int, message_id: int, text: str
+    ) -> bool:
+        """Edit an existing message, stripping any inline keyboard. Returns success."""
+        truncated = text[:MAX_MESSAGE_LENGTH]
+        try:
+            await self._bot.edit_message_text(
+                truncated, chat_id=chat_id, message_id=message_id, reply_markup=None,
+            )
+            return True
+        except Exception:
+            return False
+
     async def remove_reply_markup(self, chat_id: int, message_id: int) -> None:
         """Remove inline keyboard from a message."""
         try:
@@ -123,8 +177,9 @@ class StreamRenderer:
     """Base interface for rendering claude event streams to Telegram."""
 
     async def on_text(self, text: str) -> None: ...
-    async def on_tool(self, tool_name: str) -> None: ...
+    async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None: ...
     async def on_thinking(self, text: str) -> None: ...
+    async def on_final(self, text: str, context_tokens: int) -> None: ...
     async def finish(self) -> None: ...
     async def cleanup(self) -> None: ...
 
@@ -136,23 +191,50 @@ class VerboseRenderer(StreamRenderer):
         self._ui = ui
         self._chat_id = chat_id
         self._last_message_id: int | None = None
+        self._last_text_message_id: int | None = None
+        self._last_text: str | None = None
 
-    async def _emit(self, text: str) -> None:
+    async def _emit(self, text: str, *, is_text: bool = False) -> None:
         new_id = await self._ui.send_step(self._chat_id, text, with_cancel=True)
         if self._last_message_id is not None:
             await self._ui.remove_reply_markup(self._chat_id, self._last_message_id)
         self._last_message_id = new_id
+        if is_text:
+            self._last_text_message_id = new_id
+            self._last_text = text
+        else:
+            self._last_text_message_id = None
+            self._last_text = None
 
     async def on_text(self, text: str) -> None:
         if text.strip():
-            await self._emit(text)
+            await self._emit(text, is_text=True)
 
-    async def on_tool(self, tool_name: str) -> None:
-        await self._emit(f"{TOOL_PREFIX}{tool_name}")
+    async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None:
+        await self._emit(_format_tool_line(tool_name, tool_input))
 
     async def on_thinking(self, text: str) -> None:
         if text.strip():
             await self._emit(f"{THINKING_PREFIX}{text}")
+
+    async def on_final(self, text: str, context_tokens: int) -> None:
+        """Dedupe: if last emitted was the same text, just append token footer in-place."""
+        footer = f" ({_format_tokens(context_tokens)})" if context_tokens > 0 else ""
+        combined = f"{text}{footer}"
+        can_edit = (
+            self._last_text_message_id is not None
+            and self._last_text == text
+            and len(combined) <= MAX_MESSAGE_LENGTH
+        )
+        if can_edit and await self._ui.edit_plain(
+            self._chat_id, self._last_text_message_id, combined
+        ):
+            self._last_message_id = None
+            return
+        if self._last_message_id is not None:
+            await self._ui.remove_reply_markup(self._chat_id, self._last_message_id)
+            self._last_message_id = None
+        await self._ui.send_final(self._chat_id, text, context_tokens)
 
     async def finish(self) -> None:
         if self._last_message_id is not None:
@@ -166,21 +248,28 @@ class CompactRenderer(StreamRenderer):
     """Legacy single-message-with-edit UX via ProgressTracker."""
 
     def __init__(self, ui: TelegramUI, chat_id: int) -> None:
+        self._ui = ui
+        self._chat_id = chat_id
         self._tracker = ProgressTracker(ui, chat_id)
 
     async def on_text(self, text: str) -> None:
         await self._tracker.on_text(text)
 
-    async def on_tool(self, tool_name: str) -> None:
-        await self._tracker.on_tool_use(tool_name)
+    async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None:
+        await self._tracker.on_tool_use(tool_name, tool_input)
 
     async def on_thinking(self, text: str) -> None:
         await self._tracker.on_thinking(text)
 
-    async def finish(self) -> None:
+    async def on_final(self, text: str, context_tokens: int) -> None:
         await self._tracker.finish()
         await self._tracker.remove_cancel_button()
         await self._tracker.delete_progress()
+        await self._ui.send_final(self._chat_id, text, context_tokens)
+
+    async def finish(self) -> None:
+        await self._tracker.finish()
+        await self._tracker.remove_cancel_button()
 
     async def cleanup(self) -> None:
         await self._tracker.remove_cancel_button()
@@ -189,14 +278,21 @@ class CompactRenderer(StreamRenderer):
 class QuietRenderer(StreamRenderer):
     """No step messages — only the final response is sent."""
 
+    def __init__(self, ui: TelegramUI, chat_id: int) -> None:
+        self._ui = ui
+        self._chat_id = chat_id
+
     async def on_text(self, text: str) -> None:
         return None
 
-    async def on_tool(self, tool_name: str) -> None:
+    async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None:
         return None
 
     async def on_thinking(self, text: str) -> None:
         return None
+
+    async def on_final(self, text: str, context_tokens: int) -> None:
+        await self._ui.send_final(self._chat_id, text, context_tokens)
 
     async def finish(self) -> None:
         return None
@@ -211,7 +307,7 @@ def build_renderer(mode: str, ui: TelegramUI, chat_id: int) -> StreamRenderer:
     if mode == "compact":
         return CompactRenderer(ui, chat_id)
     if mode == "quiet":
-        return QuietRenderer()
+        return QuietRenderer(ui, chat_id)
     raise ValueError(f"unknown streaming mode: {mode}")
 
 
@@ -230,8 +326,8 @@ class ProgressTracker:
         self._lines = [text]
         await self._flush()
 
-    async def on_tool_use(self, tool_name: str) -> None:
-        self._lines.append(f"{TOOL_PREFIX}{tool_name}...")
+    async def on_tool_use(self, tool_name: str, tool_input: dict | None = None) -> None:
+        self._lines.append(_format_tool_line(tool_name, tool_input, suffix="..."))
         await self._flush()
 
     async def on_thinking(self, text: str) -> None:
