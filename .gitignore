@@ -9,3 +9,5 @@ untracked/
 *.egg-info/
 dist/
 build/
+deploy.log
+.omc/

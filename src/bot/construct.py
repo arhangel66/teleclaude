@@ -4,6 +4,7 @@ from src.bot.config import Settings
 from src.bot.services.claude_runner import ClaudeRunner
 from src.bot.services.session_store import SessionStore
 from src.bot.services.telegram_ui import TelegramUI
+from src.bot.services.transcriber import Transcriber
 
 settings = Settings()
 
@@ -14,3 +15,4 @@ claude_runner = ClaudeRunner(
     working_directory=settings.working_directory,
 )
 telegram_ui = TelegramUI(bot=bot)
+transcriber = Transcriber(api_key=settings.openrouter_api_key, model=settings.stt_model)

@@ -13,6 +13,9 @@ TYPING_INTERVAL_SECONDS = 4.0
 
 CANCEL_CALLBACK_PREFIX = "cancel:"
 
+TOOL_PREFIX = "⚙ "
+THINKING_PREFIX = "🧠 "
+
 
 def _cancel_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -74,6 +77,18 @@ class TelegramUI:
         except Exception:
             pass  # Telegram may reject identical edits
 
+    async def send_step(
+        self, chat_id: int, text: str, *, with_cancel: bool
+    ) -> int:
+        """Send a new step message (not edit). Returns message_id.
+
+        Used by verbose streaming mode for per-event messages.
+        """
+        truncated = text[:MAX_MESSAGE_LENGTH] if text else "…"
+        reply_markup = _cancel_keyboard(chat_id) if with_cancel else None
+        msg = await self._bot.send_message(chat_id, truncated, reply_markup=reply_markup)
+        return msg.message_id
+
     async def remove_reply_markup(self, chat_id: int, message_id: int) -> None:
         """Remove inline keyboard from a message."""
         try:
@@ -104,8 +119,104 @@ class TelegramUI:
             await self._bot.send_message(chat_id, chunk)
 
 
+class StreamRenderer:
+    """Base interface for rendering claude event streams to Telegram."""
+
+    async def on_text(self, text: str) -> None: ...
+    async def on_tool(self, tool_name: str) -> None: ...
+    async def on_thinking(self, text: str) -> None: ...
+    async def finish(self) -> None: ...
+    async def cleanup(self) -> None: ...
+
+
+class VerboseRenderer(StreamRenderer):
+    """Send each event as a separate Telegram message, cancel button migrates."""
+
+    def __init__(self, ui: TelegramUI, chat_id: int) -> None:
+        self._ui = ui
+        self._chat_id = chat_id
+        self._last_message_id: int | None = None
+
+    async def _emit(self, text: str) -> None:
+        new_id = await self._ui.send_step(self._chat_id, text, with_cancel=True)
+        if self._last_message_id is not None:
+            await self._ui.remove_reply_markup(self._chat_id, self._last_message_id)
+        self._last_message_id = new_id
+
+    async def on_text(self, text: str) -> None:
+        if text.strip():
+            await self._emit(text)
+
+    async def on_tool(self, tool_name: str) -> None:
+        await self._emit(f"{TOOL_PREFIX}{tool_name}")
+
+    async def on_thinking(self, text: str) -> None:
+        if text.strip():
+            await self._emit(f"{THINKING_PREFIX}{text}")
+
+    async def finish(self) -> None:
+        if self._last_message_id is not None:
+            await self._ui.remove_reply_markup(self._chat_id, self._last_message_id)
+
+    async def cleanup(self) -> None:
+        await self.finish()
+
+
+class CompactRenderer(StreamRenderer):
+    """Legacy single-message-with-edit UX via ProgressTracker."""
+
+    def __init__(self, ui: TelegramUI, chat_id: int) -> None:
+        self._tracker = ProgressTracker(ui, chat_id)
+
+    async def on_text(self, text: str) -> None:
+        await self._tracker.on_text(text)
+
+    async def on_tool(self, tool_name: str) -> None:
+        await self._tracker.on_tool_use(tool_name)
+
+    async def on_thinking(self, text: str) -> None:
+        await self._tracker.on_thinking(text)
+
+    async def finish(self) -> None:
+        await self._tracker.finish()
+        await self._tracker.remove_cancel_button()
+        await self._tracker.delete_progress()
+
+    async def cleanup(self) -> None:
+        await self._tracker.remove_cancel_button()
+
+
+class QuietRenderer(StreamRenderer):
+    """No step messages — only the final response is sent."""
+
+    async def on_text(self, text: str) -> None:
+        return None
+
+    async def on_tool(self, tool_name: str) -> None:
+        return None
+
+    async def on_thinking(self, text: str) -> None:
+        return None
+
+    async def finish(self) -> None:
+        return None
+
+    async def cleanup(self) -> None:
+        return None
+
+
+def build_renderer(mode: str, ui: TelegramUI, chat_id: int) -> StreamRenderer:
+    if mode == "verbose":
+        return VerboseRenderer(ui, chat_id)
+    if mode == "compact":
+        return CompactRenderer(ui, chat_id)
+    if mode == "quiet":
+        return QuietRenderer()
+    raise ValueError(f"unknown streaming mode: {mode}")
+
+
 class ProgressTracker:
-    """Tracks progress state and handles throttled edits."""
+    """Tracks progress state and handles throttled edits (compact mode)."""
 
     def __init__(self, ui: TelegramUI, chat_id: int) -> None:
         self._ui = ui
@@ -120,8 +231,14 @@ class ProgressTracker:
         await self._flush()
 
     async def on_tool_use(self, tool_name: str) -> None:
-        self._lines.append(f"⚙ {tool_name}...")
+        self._lines.append(f"{TOOL_PREFIX}{tool_name}...")
         await self._flush()
+
+    async def on_thinking(self, text: str) -> None:
+        snippet = text.strip().splitlines()[0] if text.strip() else ""
+        if snippet:
+            self._lines.append(f"{THINKING_PREFIX}{snippet}")
+            await self._flush()
 
     async def finish(self) -> None:
         """Flush any remaining pending edit."""
@@ -182,7 +299,6 @@ def _split_text(text: str, limit: int) -> list[str]:
         if len(text) <= limit:
             chunks.append(text)
             break
-        # Try to split at newline
         split_at = text.rfind("\n", 0, limit)
         if split_at == -1:
             split_at = limit

@@ -25,6 +25,11 @@ class ToolUseEvent:
 
 
 @dataclass
+class ThinkingEvent:
+    text: str
+
+
+@dataclass
 class ResultEvent:
     text: str
     context_tokens: int
@@ -36,7 +41,7 @@ class _AssistantUsage:
     tokens: int
 
 
-Event = SystemEvent | TextEvent | ToolUseEvent | ResultEvent
+Event = SystemEvent | TextEvent | ToolUseEvent | ThinkingEvent | ResultEvent
 
 
 class ClaudeRunner:
@@ -161,10 +166,15 @@ class ClaudeRunner:
             if tokens:
                 out.append(_AssistantUsage(tokens=tokens))
             for block in message.get("content", []):
-                if block.get("type") == "text":
-                    out.append(TextEvent(text=block["text"]))
-                elif block.get("type") == "tool_use":
+                block_type = block.get("type")
+                if block_type == "text":
+                    out.append(TextEvent(text=block.get("text", "")))
+                elif block_type == "tool_use":
                     out.append(ToolUseEvent(tool_name=block.get("name", "tool")))
+                elif block_type == "thinking":
+                    thinking_text = block.get("thinking") or block.get("text") or ""
+                    if thinking_text:
+                        out.append(ThinkingEvent(text=thinking_text))
             return out
 
         elif event_type == "result":

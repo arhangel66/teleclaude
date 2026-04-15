@@ -1,5 +1,3 @@
-import asyncio
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +24,7 @@ async def test_download_photo_saves_file(tmp_files_dir: Path) -> None:
     message.photo = [photo]
     message.voice = None
     message.video = None
+    message.video_note = None
     message.document = None
     message.caption = "Look at this"
 
@@ -38,8 +37,9 @@ async def test_download_photo_saves_file(tmp_files_dir: Path) -> None:
 
     # Assert
     assert result is not None
-    file_path, caption = result
+    file_path, caption, kind = result
     assert caption == "Look at this"
+    assert kind == "photo"
     assert str(file_path).endswith(".jpg")
     assert "/42/" in str(file_path)
     mock_bot.download.assert_called_once()
@@ -54,6 +54,7 @@ async def test_download_returns_none_for_text_only() -> None:
     message.photo = None
     message.voice = None
     message.video = None
+    message.video_note = None
     message.document = None
 
     # Act

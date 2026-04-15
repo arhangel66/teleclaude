@@ -5,18 +5,37 @@ from pathlib import Path
 from aiogram import Router, types
 from aiogram.filters import Command
 
-from src.bot.construct import bot, claude_runner, session_store, settings, telegram_ui
-from src.bot.services.claude_runner import ResultEvent, SystemEvent, TextEvent, ToolUseEvent
-from src.bot.services.telegram_ui import CANCEL_CALLBACK_PREFIX, ProgressTracker
+from src.bot.construct import (
+    bot,
+    claude_runner,
+    session_store,
+    settings,
+    telegram_ui,
+    transcriber,
+)
+from src.bot.services.claude_runner import (
+    ResultEvent,
+    SystemEvent,
+    TextEvent,
+    ThinkingEvent,
+    ToolUseEvent,
+)
+from src.bot.services.telegram_ui import CANCEL_CALLBACK_PREFIX, build_renderer
+from src.bot.services.transcriber import TranscriptionError
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 FILES_DIR = Path("files")
 
+AttachmentResult = tuple[Path, str, str]  # (path, caption, kind)
 
-async def _download_file(message: types.Message) -> tuple[Path, str] | None:
-    """Download attachment from message. Returns (path, caption) or None."""
+
+async def _download_file(message: types.Message) -> AttachmentResult | None:
+    """Download attachment from message. Returns (path, caption, kind) or None.
+
+    kind ∈ {"photo", "voice", "video", "video_note", "document"}.
+    """
     chat_id = message.chat.id
     ts = int(time.time())
     dest_dir = FILES_DIR / str(chat_id)
@@ -24,29 +43,38 @@ async def _download_file(message: types.Message) -> tuple[Path, str] | None:
 
     file_id: str | None = None
     filename: str | None = None
+    kind: str | None = None
 
     if message.photo:
         largest = message.photo[-1]
         file_id = largest.file_id
         filename = f"{ts}_{largest.file_id}.jpg"
+        kind = "photo"
     elif message.voice:
         file_id = message.voice.file_id
         filename = f"{ts}_voice.ogg"
+        kind = "voice"
+    elif getattr(message, "video_note", None):
+        file_id = message.video_note.file_id
+        filename = f"{ts}_video_note.mp4"
+        kind = "video_note"
     elif message.video:
         file_id = message.video.file_id
         filename = f"{ts}_video.mp4"
+        kind = "video"
     elif message.document:
         file_id = message.document.file_id
         original_name = message.document.file_name or "document"
         filename = f"{ts}_{original_name}"
+        kind = "document"
 
-    if not file_id or not filename:
+    if not file_id or not filename or not kind:
         return None
 
     dest_path = dest_dir / filename
     await bot.download(file_id, destination=dest_path)
     caption = message.caption or ""
-    return dest_path.resolve(), caption
+    return dest_path.resolve(), caption, kind
 
 
 def _is_allowed(chat_id: int) -> bool:
@@ -68,24 +96,40 @@ async def cmd_new(message: types.Message) -> None:
     await message.answer("New session started.")
 
 
+async def _build_prompt(message: types.Message) -> str | None:
+    """Resolve the message into a Claude prompt. Returns None if unusable."""
+    file_result = await _download_file(message)
+    if file_result:
+        file_path, caption, kind = file_result
+        if kind in ("voice", "video_note"):
+            try:
+                transcript = await transcriber.transcribe(file_path)
+            except TranscriptionError as exc:
+                logger.warning("Transcription failed for chat_id=%d: %s", message.chat.id, exc)
+                await telegram_ui.send_text(
+                    message.chat.id, f"Не удалось распознать речь: {exc}"
+                )
+                return None
+            logger.info("Transcribed voice (%d chars)", len(transcript))
+            prompt = f"(voice transcript): {transcript}"
+            if caption:
+                prompt = f"{prompt}\n\n{caption}"
+            return prompt
+        if caption:
+            return f"User sent a file: {file_path}\n\n{caption}"
+        return f"User sent a file: {file_path}"
+    if message.text:
+        return message.text
+    return None
+
+
 @router.message()
 async def on_message(message: types.Message) -> None:
     chat_id = message.chat.id
     if not _is_allowed(chat_id):
         return
 
-    # Build prompt from text or file
-    prompt: str | None = None
-    file_result = await _download_file(message)
-    if file_result:
-        file_path, caption = file_result
-        if caption:
-            prompt = f"User sent a file: {file_path}\n\n{caption}"
-        else:
-            prompt = f"User sent a file: {file_path}"
-    elif message.text:
-        prompt = message.text
-
+    prompt = await _build_prompt(message)
     if not prompt:
         return
 
@@ -96,7 +140,8 @@ async def on_message(message: types.Message) -> None:
     session_id = await session_store.get(chat_id)
     if session_id is None:
         prompt = f"[chat_id={chat_id}]\n\n{prompt}"
-    progress = ProgressTracker(telegram_ui, chat_id)
+
+    renderer = build_renderer(settings.streaming_mode, telegram_ui, chat_id)
 
     await telegram_ui.start_typing(chat_id)
     try:
@@ -104,19 +149,19 @@ async def on_message(message: types.Message) -> None:
             if isinstance(event, SystemEvent):
                 await session_store.set(chat_id, event.session_id)
             elif isinstance(event, TextEvent):
-                await progress.on_text(event.text)
+                await renderer.on_text(event.text)
             elif isinstance(event, ToolUseEvent):
-                await progress.on_tool_use(event.tool_name)
+                await renderer.on_tool(event.tool_name)
+            elif isinstance(event, ThinkingEvent):
+                await renderer.on_thinking(event.text)
             elif isinstance(event, ResultEvent):
                 logger.info("Got result, sending final (%d tokens)", event.context_tokens)
-                await progress.finish()
-                await progress.remove_cancel_button()
-                await progress.delete_progress()
+                await renderer.finish()
                 await telegram_ui.send_final(chat_id, event.text, event.context_tokens)
                 logger.info("Final message sent")
     except Exception:
         logger.exception("Error processing message for chat_id=%d", chat_id)
-        await progress.remove_cancel_button()
+        await renderer.cleanup()
         await telegram_ui.send_text(chat_id, "Error processing your message.")
     finally:
         await telegram_ui.stop_typing(chat_id)

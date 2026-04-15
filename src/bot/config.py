@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
@@ -7,6 +9,13 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str
     allowed_chat_ids: list[int]
+    working_directory: str
+    claude_binary: str = "claude"
+    sqlite_db: str = "sessions.db"
+
+    openrouter_api_key: str
+    stt_model: str = "google/gemini-2.5-flash"
+    streaming_mode: Literal["verbose", "compact", "quiet"] = "verbose"
 
     @field_validator("allowed_chat_ids", mode="before")
     @classmethod
@@ -16,6 +25,3 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return v
-    working_directory: str
-    claude_binary: str = "claude"
-    sqlite_db: str = "sessions.db"
