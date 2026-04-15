@@ -243,6 +243,8 @@ def test_format_tool_detail_picks_known_key() -> None:
     assert _format_tool_detail("Bash", {"description": "run tests", "command": "pytest"}) == "run tests"
     assert _format_tool_detail("Bash", {"command": "pytest -v"}) == "pytest -v"
     assert _format_tool_detail("Grep", {"pattern": "foo"}) == "foo"
+    assert _format_tool_detail("Skill", {"skill": "morning-briefing", "args": ""}) == "morning-briefing"
+    assert _format_tool_detail("SlashCommand", {"command": "/compact"}) == "/compact"
     assert _format_tool_detail("Unknown", {"path": "/x"}) == "/x"
 
 

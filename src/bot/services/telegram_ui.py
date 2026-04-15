@@ -29,6 +29,8 @@ _TOOL_DETAIL_KEYS: dict[str, tuple[str, ...]] = {
     "Task": ("description",),
     "WebFetch": ("url",),
     "WebSearch": ("query",),
+    "Skill": ("skill", "name"),
+    "SlashCommand": ("command", "name"),
     "TodoWrite": (),
 }
 
