@@ -16,6 +16,42 @@ CANCEL_CALLBACK_PREFIX = "cancel:"
 TOOL_PREFIX = "⚙ "
 THINKING_PREFIX = "🧠 "
 
+EXPANDABLE_THRESHOLD = 4
+TRUNCATION_MARKER = "…"
+_MD_V2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
+
+
+def _escape_md_v2(text: str) -> str:
+    """Escape Telegram MarkdownV2 reserved characters."""
+    return "".join("\\" + ch if ch in _MD_V2_RESERVED else ch for ch in text)
+
+
+def _assemble_blockquote(lines: list[str], truncated: bool) -> str:
+    all_lines = ([TRUNCATION_MARKER] if truncated else []) + list(lines)
+    if not all_lines:
+        return ""
+    if len(all_lines) > EXPANDABLE_THRESHOLD:
+        rendered = ["**> " + all_lines[0]]
+        for ln in all_lines[1:-1]:
+            rendered.append("> " + ln)
+        rendered.append("> " + all_lines[-1] + "||")
+        return "\n".join(rendered)
+    return "\n".join("> " + ln for ln in all_lines)
+
+
+def _render_block(lines: list[str]) -> str:
+    """Render escaped log lines as a MarkdownV2 blockquote (tail-trims if oversize)."""
+    work = list(lines)
+    truncated = False
+    while True:
+        body = _assemble_blockquote(work, truncated)
+        if len(body) <= MAX_MESSAGE_LENGTH:
+            return body
+        if len(work) <= 1:
+            return body[:MAX_MESSAGE_LENGTH]
+        work = work[1:]
+        truncated = True
+
 MAX_TOOL_DETAIL_LEN = 100
 
 _TOOL_DETAIL_KEYS: dict[str, tuple[str, ...]] = {
@@ -99,26 +135,47 @@ class TelegramUI:
             except asyncio.CancelledError:
                 pass
 
-    async def send_progress(self, chat_id: int, text: str) -> int:
+    async def send_progress(
+        self, chat_id: int, text: str, *, parse_mode: str | None = None,
+    ) -> int:
         """Send initial progress message with cancel button, return message_id."""
         truncated = text[:MAX_MESSAGE_LENGTH]
+        kwargs: dict[str, str] = {}
+        if parse_mode is not None:
+            kwargs["parse_mode"] = parse_mode
         msg = await self._bot.send_message(
-            chat_id, truncated, reply_markup=_cancel_keyboard(chat_id)
+            chat_id, truncated, reply_markup=_cancel_keyboard(chat_id), **kwargs,
         )
         return msg.message_id
 
     async def update_progress(
-        self, chat_id: int, message_id: int, text: str
-    ) -> None:
-        """Edit progress message with cancel button (caller handles throttling)."""
+        self, chat_id: int, message_id: int, text: str,
+        *, parse_mode: str | None = None,
+    ) -> bool:
+        """Edit progress message with cancel button; returns True on success."""
         truncated = text[:MAX_MESSAGE_LENGTH]
+        kwargs: dict[str, str] = {}
+        if parse_mode is not None:
+            kwargs["parse_mode"] = parse_mode
         try:
             await self._bot.edit_message_text(
                 truncated, chat_id=chat_id, message_id=message_id,
-                reply_markup=_cancel_keyboard(chat_id),
+                reply_markup=_cancel_keyboard(chat_id), **kwargs,
             )
+            return True
         except Exception:
-            pass  # Telegram may reject identical edits
+            return False
+
+    async def update_progress_md(
+        self, chat_id: int, message_id: int, text: str,
+    ) -> None:
+        """Edit with MarkdownV2, falling back to plain text on failure."""
+        ok = await self.update_progress(
+            chat_id, message_id, text, parse_mode="MarkdownV2",
+        )
+        if not ok:
+            logger.debug("MarkdownV2 edit failed for chat %d, retrying plain", chat_id)
+            await self.update_progress(chat_id, message_id, text)
 
     async def send_step(
         self, chat_id: int, text: str, *, with_cancel: bool
@@ -303,6 +360,76 @@ class QuietRenderer(StreamRenderer):
         return None
 
 
+class ThreadRenderer(StreamRenderer):
+    """Two-message UX: one edited-in-place MarkdownV2 blockquote log + one final-answer message."""
+
+    def __init__(self, ui: TelegramUI, chat_id: int) -> None:
+        self._ui = ui
+        self._chat_id = chat_id
+        self._lines: list[str] = []
+        self._message_id: int | None = None
+        self._last_edit: float = 0.0
+        self._pending: bool = False
+
+    async def on_text(self, text: str) -> None:
+        snippet = text.strip().replace("\n", " ")
+        if snippet:
+            self._lines.append(_escape_md_v2(snippet))
+            await self._flush()
+
+    async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None:
+        self._lines.append(_escape_md_v2(_format_tool_line(tool_name, tool_input)))
+        await self._flush()
+
+    async def on_thinking(self, text: str) -> None:
+        first_line = text.strip().splitlines()[0] if text.strip() else ""
+        if first_line:
+            self._lines.append(_escape_md_v2(f"{THINKING_PREFIX}{first_line}"))
+            await self._flush()
+
+    async def on_final(self, text: str, context_tokens: int) -> None:
+        await self._flush(force=True)
+        if self._message_id is not None:
+            await self._ui.remove_reply_markup(self._chat_id, self._message_id)
+        await self._ui.send_final(self._chat_id, text, context_tokens)
+
+    async def finish(self) -> None:
+        await self._flush(force=True)
+        if self._message_id is not None:
+            await self._ui.remove_reply_markup(self._chat_id, self._message_id)
+
+    async def cleanup(self) -> None:
+        if self._message_id is not None:
+            await self._ui.remove_reply_markup(self._chat_id, self._message_id)
+
+    async def _flush(self, *, force: bool = False) -> None:
+        if not self._lines:
+            return
+        body = _render_block(self._lines)
+
+        if self._message_id is None:
+            try:
+                self._message_id = await self._ui.send_progress(
+                    self._chat_id, body, parse_mode="MarkdownV2",
+                )
+            except Exception:
+                logger.debug("MarkdownV2 send_progress failed, retrying plain")
+                self._message_id = await self._ui.send_progress(
+                    self._chat_id, body,
+                )
+            self._last_edit = time.monotonic()
+            self._pending = False
+            return
+
+        now = time.monotonic()
+        if force or now - self._last_edit >= THROTTLE_SECONDS:
+            await self._ui.update_progress_md(self._chat_id, self._message_id, body)
+            self._last_edit = now
+            self._pending = False
+        else:
+            self._pending = True
+
+
 def build_renderer(mode: str, ui: TelegramUI, chat_id: int) -> StreamRenderer:
     if mode == "verbose":
         return VerboseRenderer(ui, chat_id)
@@ -310,6 +437,8 @@ def build_renderer(mode: str, ui: TelegramUI, chat_id: int) -> StreamRenderer:
         return CompactRenderer(ui, chat_id)
     if mode == "quiet":
         return QuietRenderer(ui, chat_id)
+    if mode == "thread":
+        return ThreadRenderer(ui, chat_id)
     raise ValueError(f"unknown streaming mode: {mode}")
 
 

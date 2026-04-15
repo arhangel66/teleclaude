@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str
     stt_model: str = "google/gemini-2.5-flash"
-    streaming_mode: Literal["verbose", "compact", "quiet"] = "verbose"
+    streaming_mode: Literal["verbose", "compact", "quiet", "thread"] = "thread"
 
     @field_validator("allowed_chat_ids", mode="before")
     @classmethod
