@@ -183,6 +183,11 @@ PY
     fi
 }
 
+git_push() {
+    log "Pushing to origin"
+    git push
+}
+
 rsync_code() {
     log "Syncing code -> $SERVER:$REMOTE_DIR"
     rsync -az --delete "${RSYNC_EXCLUDES[@]}" ./ "$SERVER:$REMOTE_DIR/"
@@ -225,6 +230,8 @@ cmd_deploy() {
     log_step "start" 0 "ok"
 
     ensure_env_on_server
+
+    run_step git_push git_push
 
     if (( SKIP_TESTS == 0 )); then
         run_step ruff   run_ruff

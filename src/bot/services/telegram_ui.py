@@ -240,10 +240,19 @@ class TelegramUI:
         await self._send_long(chat_id, text)
 
     async def _send_long(self, chat_id: int, text: str) -> None:
-        """Split and send text that may exceed Telegram limit."""
+        """Split and send text that may exceed Telegram limit.
+
+        Tries Markdown parse_mode first for bold/italic rendering,
+        falls back to plain text if Telegram rejects the markup.
+        """
         chunks = _split_text(text, MAX_MESSAGE_LENGTH)
         for chunk in chunks:
-            await self._bot.send_message(chat_id, chunk)
+            try:
+                await self._bot.send_message(
+                    chat_id, chunk, parse_mode="Markdown",
+                )
+            except Exception:
+                await self._bot.send_message(chat_id, chunk)
 
 
 class StreamRenderer:
