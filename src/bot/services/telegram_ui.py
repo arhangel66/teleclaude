@@ -265,7 +265,16 @@ class TelegramUI:
                 reply_markup=_cancel_keyboard(chat_id), **kwargs,
             )
             return True
-        except Exception:
+        except Exception as exc:
+            msg = str(exc).lower()
+            # "message is not modified" — identical edit, not a real failure
+            if "not modified" in msg:
+                return True
+            if parse_mode:
+                logger.warning(
+                    "edit_message_text failed (parse_mode=%s): %s | text[:200]=%r",
+                    parse_mode, exc, truncated[:200],
+                )
             return False
 
     async def update_progress_md(
@@ -339,7 +348,11 @@ class TelegramUI:
                 await self._bot.send_message(
                     chat_id, _markdown_to_html(chunk), parse_mode="HTML",
                 )
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "send_message HTML failed: %s | chunk[:200]=%r",
+                    exc, chunk[:200],
+                )
                 await self._bot.send_message(chat_id, chunk)
 
 
@@ -523,8 +536,11 @@ class ThreadRenderer(StreamRenderer):
                 self._message_id = await self._ui.send_progress(
                     self._chat_id, body_html, parse_mode="HTML",
                 )
-            except Exception:
-                logger.debug("HTML send_progress failed, retrying plain")
+            except Exception as exc:
+                logger.warning(
+                    "HTML send_progress failed: %s | body[:200]=%r",
+                    exc, body_html[:200],
+                )
                 self._message_id = await self._ui.send_progress(
                     self._chat_id, body_plain,
                 )
