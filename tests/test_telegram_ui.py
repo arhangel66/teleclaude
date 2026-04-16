@@ -8,6 +8,7 @@ from src.bot.services.telegram_ui import (
     TelegramUI,
     ThreadRenderer,
     _escape_md_v2,
+    _markdown_to_html,
     _strip_md_v2_escapes,
     build_renderer,
 )
@@ -92,9 +93,9 @@ async def test_thread_renderer_appends_and_edits_in_place(ui_bot) -> None:
     await renderer.on_tool("Grep", {"pattern": "test"})
     await renderer.finish()
 
-    # Assert — exactly one initial send_message, at least one MarkdownV2 edit
+    # Assert — exactly one initial send_message, at least one HTML edit
     assert len(bot.sends) == 1
-    assert any(e[3] == "MarkdownV2" for e in bot.edits)
+    assert any(e[3] == "HTML" for e in bot.edits)
 
 
 @pytest.mark.asyncio
@@ -144,9 +145,9 @@ async def test_thread_renderer_wraps_expandable_over_threshold(ui_bot) -> None:
         await renderer.on_thinking(f"step {i}")
     await renderer.finish()
 
-    # Assert — at least one rendered body uses expandable-blockquote markers
+    # Assert — at least one rendered body uses HTML expandable blockquote
     bodies = [bot.sends[0][1]] + [e[2] for e in bot.edits]
-    assert any(b.startswith("**>") and b.endswith("||") for b in bodies)
+    assert any("<blockquote expandable>" in b for b in bodies)
 
 
 @pytest.mark.asyncio
@@ -161,13 +162,12 @@ async def test_thread_renderer_retries_plain_on_markdownv2_failure(ui_bot) -> No
     await renderer.on_tool("Grep", {"pattern": "foo"})
     await renderer.finish()
 
-    # Assert — no crash, and at least one plain edit is clean of MarkdownV2 markup
+    # Assert — no crash, and at least one plain edit is clean of blockquote markup
     plain_edits = [e[2] for e in bot.edits if e[3] is None]
     assert plain_edits
     for body in plain_edits:
-        assert "**>" not in body
-        assert "||" not in body
-        assert "\\" not in body
+        assert "<blockquote" not in body
+        assert "</blockquote>" not in body
 
 
 @pytest.mark.asyncio
@@ -232,6 +232,38 @@ async def test_thread_renderer_on_text_is_noop(ui_bot) -> None:
     # Assert — nothing sent, no lines accumulated
     assert len(bot.sends) == 0
     assert len(renderer._lines) == 0
+
+
+def test_markdown_to_html_bold() -> None:
+    assert _markdown_to_html("**Привет**") == "<b>Привет</b>"
+    assert _markdown_to_html("*Погода*") == "<b>Погода</b>"
+
+
+def test_markdown_to_html_inline_code_with_underscores() -> None:
+    # Key regression: `_path_` inside code must not be interpreted as italic
+    result = _markdown_to_html("файл `/opt/.glovo/tokens.json` не найден")
+    assert "<code>/opt/.glovo/tokens.json</code>" in result
+    assert "<i>" not in result
+
+
+def test_markdown_to_html_escapes_html_outside_code() -> None:
+    assert _markdown_to_html("a < b & c") == "a &lt; b &amp; c"
+
+
+def test_markdown_to_html_code_block() -> None:
+    md = "```\nfoo bar\n```"
+    result = _markdown_to_html(md)
+    assert "<pre>foo bar\n</pre>" in result
+
+
+def test_markdown_to_html_link() -> None:
+    assert _markdown_to_html("[site](https://x.com)") == '<a href="https://x.com">site</a>'
+
+
+def test_markdown_to_html_does_not_double_escape_inside_code() -> None:
+    # Inside `code`, < and > should be escaped once, not parsed as markdown
+    result = _markdown_to_html("try `a < b`")
+    assert "<code>a &lt; b</code>" in result
 
 
 def test_build_renderer_thread_returns_thread_renderer() -> None:

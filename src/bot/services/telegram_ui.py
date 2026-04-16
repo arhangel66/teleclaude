@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 
 from aiogram import Bot
@@ -19,6 +20,73 @@ THINKING_PREFIX = "🧠 "
 EXPANDABLE_THRESHOLD = 4
 TRUNCATION_MARKER = "…"
 _MD_V2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
+
+
+def _escape_html(text: str) -> str:
+    """Escape Telegram HTML reserved characters (&, <, >)."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_MD_CODE_BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+_MD_CODE_INLINE = re.compile(r"`([^`\n]+)`")
+_MD_BOLD = re.compile(r"\*\*([^*\n]+)\*\*")
+_MD_BOLD_ALT = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
+_MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+
+def _markdown_to_html(text: str) -> str:
+    """Convert a safe subset of Markdown to Telegram HTML.
+
+    Supports: **bold**, *bold*, `code`, ```code blocks```, [text](url).
+    Everything else is HTML-escaped.
+    """
+    placeholders: list[str] = []
+
+    def _stash(html: str) -> str:
+        placeholders.append(html)
+        return f"\x00{len(placeholders) - 1}\x00"
+
+    def _stash_block(m: "re.Match[str]") -> str:
+        return _stash(f"<pre>{_escape_html(m.group(2))}</pre>")
+
+    def _stash_inline(m: "re.Match[str]") -> str:
+        return _stash(f"<code>{_escape_html(m.group(1))}</code>")
+
+    def _stash_link(m: "re.Match[str]") -> str:
+        return _stash(f'<a href="{_escape_html(m.group(2))}">{_escape_html(m.group(1))}</a>')
+
+    text = _MD_CODE_BLOCK.sub(_stash_block, text)
+    text = _MD_CODE_INLINE.sub(_stash_inline, text)
+    text = _MD_LINK.sub(_stash_link, text)
+
+    text = _escape_html(text)
+    text = _MD_BOLD.sub(r"<b>\1</b>", text)
+    text = _MD_BOLD_ALT.sub(r"<b>\1</b>", text)
+
+    for i, html in enumerate(placeholders):
+        text = text.replace(f"\x00{i}\x00", html)
+    return text
+
+
+def _render_block_html(lines: list[str]) -> str:
+    """Render raw log lines as an HTML blockquote (tail-trims if oversize)."""
+    work = list(lines)
+    truncated = False
+    while True:
+        all_lines = ([TRUNCATION_MARKER] if truncated else []) + work
+        inner = "\n".join(_escape_html(ln) for ln in all_lines)
+        tag = (
+            "<blockquote expandable>"
+            if len(all_lines) > EXPANDABLE_THRESHOLD
+            else "<blockquote>"
+        )
+        body = f"{tag}{inner}</blockquote>"
+        if len(body) <= MAX_MESSAGE_LENGTH:
+            return body
+        if len(work) <= 1:
+            return body[:MAX_MESSAGE_LENGTH]
+        work = work[1:]
+        truncated = True
 
 
 def _escape_md_v2(text: str) -> str:
@@ -262,14 +330,14 @@ class TelegramUI:
     async def _send_long(self, chat_id: int, text: str) -> None:
         """Split and send text that may exceed Telegram limit.
 
-        Tries Markdown parse_mode first for bold/italic rendering,
+        Converts a safe subset of Markdown to HTML for reliable rendering,
         falls back to plain text if Telegram rejects the markup.
         """
         chunks = _split_text(text, MAX_MESSAGE_LENGTH)
         for chunk in chunks:
             try:
                 await self._bot.send_message(
-                    chat_id, chunk, parse_mode="Markdown",
+                    chat_id, _markdown_to_html(chunk), parse_mode="HTML",
                 )
             except Exception:
                 await self._bot.send_message(chat_id, chunk)
@@ -447,16 +515,16 @@ class ThreadRenderer(StreamRenderer):
     async def _flush(self, *, force: bool = False) -> None:
         if not self._lines:
             return
-        body_md = _render_block(self._lines)
+        body_html = _render_block_html(self._lines)
         body_plain = _render_block_plain(self._lines)
 
         if self._message_id is None:
             try:
                 self._message_id = await self._ui.send_progress(
-                    self._chat_id, body_md, parse_mode="MarkdownV2",
+                    self._chat_id, body_html, parse_mode="HTML",
                 )
             except Exception:
-                logger.debug("MarkdownV2 send_progress failed, retrying plain")
+                logger.debug("HTML send_progress failed, retrying plain")
                 self._message_id = await self._ui.send_progress(
                     self._chat_id, body_plain,
                 )
@@ -467,7 +535,7 @@ class ThreadRenderer(StreamRenderer):
         now = time.monotonic()
         if force or now - self._last_edit >= THROTTLE_SECONDS:
             ok = await self._ui.update_progress(
-                self._chat_id, self._message_id, body_md, parse_mode="MarkdownV2",
+                self._chat_id, self._message_id, body_html, parse_mode="HTML",
             )
             if not ok:
                 await self._ui.update_progress(
