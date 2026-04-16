@@ -19,7 +19,6 @@ THINKING_PREFIX = "🧠 "
 
 EXPANDABLE_THRESHOLD = 4
 TRUNCATION_MARKER = "…"
-_MD_V2_RESERVED = set(r"_*[]()~`>#+-=|{}.!\\")
 
 
 def _escape_html(text: str) -> str:
@@ -31,14 +30,18 @@ _MD_CODE_BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 _MD_CODE_INLINE = re.compile(r"`([^`\n]+)`")
 _MD_BOLD = re.compile(r"\*\*([^*\n]+)\*\*")
 _MD_BOLD_ALT = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
+_MD_ITALIC = re.compile(r"(?<!\w)_([^_\n]+?)_(?!\w)")
+_MD_STRIKE = re.compile(r"~~([^~\n]+)~~")
 _MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
 def _markdown_to_html(text: str) -> str:
     """Convert a safe subset of Markdown to Telegram HTML.
 
-    Supports: **bold**, *bold*, `code`, ```code blocks```, [text](url).
-    Everything else is HTML-escaped.
+    Supports: **bold**, *bold*, _italic_, ~~strikethrough~~,
+    `code`, ```code blocks```, [text](url).
+    Everything else is HTML-escaped. Lists are not supported natively
+    by Telegram HTML — they pass through as plain text with "- " prefix.
     """
     placeholders: list[str] = []
 
@@ -62,6 +65,8 @@ def _markdown_to_html(text: str) -> str:
     text = _escape_html(text)
     text = _MD_BOLD.sub(r"<b>\1</b>", text)
     text = _MD_BOLD_ALT.sub(r"<b>\1</b>", text)
+    text = _MD_ITALIC.sub(r"<i>\1</i>", text)
+    text = _MD_STRIKE.sub(r"<s>\1</s>", text)
 
     for i, html in enumerate(placeholders):
         text = text.replace(f"\x00{i}\x00", html)
@@ -89,64 +94,13 @@ def _render_block_html(lines: list[str]) -> str:
         truncated = True
 
 
-def _escape_md_v2(text: str) -> str:
-    """Escape Telegram MarkdownV2 reserved characters."""
-    return "".join("\\" + ch if ch in _MD_V2_RESERVED else ch for ch in text)
-
-
-def _strip_md_v2_escapes(text: str) -> str:
-    """Remove MarkdownV2 escape backslashes for plain-text fallback."""
-    result: list[str] = []
-    i = 0
-    while i < len(text):
-        if text[i] == "\\" and i + 1 < len(text) and text[i + 1] in _MD_V2_RESERVED:
-            result.append(text[i + 1])
-            i += 2
-        else:
-            result.append(text[i])
-            i += 1
-    return "".join(result)
-
-
-def _assemble_blockquote(lines: list[str], truncated: bool) -> str:
-    all_lines = ([TRUNCATION_MARKER] if truncated else []) + list(lines)
-    if not all_lines:
-        return ""
-    if len(all_lines) > EXPANDABLE_THRESHOLD:
-        rendered = ["**> " + all_lines[0]]
-        for ln in all_lines[1:-1]:
-            rendered.append("> " + ln)
-        rendered.append("> " + all_lines[-1] + "||")
-        return "\n".join(rendered)
-    return "\n".join("> " + ln for ln in all_lines)
-
-
-def _assemble_plain(lines: list[str], truncated: bool) -> str:
-    """Render log lines as plain text (no blockquote markup)."""
-    all_lines = ([TRUNCATION_MARKER] if truncated else []) + list(lines)
-    return "\n".join(all_lines)
-
-
-def _render_block(lines: list[str]) -> str:
-    """Render raw log lines as a MarkdownV2 blockquote (tail-trims if oversize)."""
-    work = list(lines)
-    truncated = False
-    while True:
-        body = _assemble_blockquote([_escape_md_v2(ln) for ln in work], truncated)
-        if len(body) <= MAX_MESSAGE_LENGTH:
-            return body
-        if len(work) <= 1:
-            return body[:MAX_MESSAGE_LENGTH]
-        work = work[1:]
-        truncated = True
-
-
 def _render_block_plain(lines: list[str]) -> str:
-    """Render raw log lines as plain text (for fallback when MarkdownV2 fails)."""
+    """Render raw log lines as plain text (fallback when HTML fails)."""
     work = list(lines)
     truncated = False
     while True:
-        body = _assemble_plain(work, truncated)
+        all_lines = ([TRUNCATION_MARKER] if truncated else []) + work
+        body = "\n".join(all_lines)
         if len(body) <= MAX_MESSAGE_LENGTH:
             return body
         if len(work) <= 1:
@@ -276,17 +230,6 @@ class TelegramUI:
                     parse_mode, exc, truncated[:200],
                 )
             return False
-
-    async def update_progress_md(
-        self, chat_id: int, message_id: int, text: str,
-    ) -> None:
-        """Edit with MarkdownV2, falling back to plain text on failure."""
-        ok = await self.update_progress(
-            chat_id, message_id, text, parse_mode="MarkdownV2",
-        )
-        if not ok:
-            logger.debug("MarkdownV2 edit failed for chat %d, retrying plain", chat_id)
-            await self.update_progress(chat_id, message_id, _strip_md_v2_escapes(text))
 
     async def send_step(
         self, chat_id: int, text: str, *, with_cancel: bool

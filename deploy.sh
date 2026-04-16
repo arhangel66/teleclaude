@@ -37,6 +37,7 @@ RSYNC_EXCLUDES=(
     --exclude="*.egg-info/"
     --exclude="deploy.log"
     --exclude=".omc/"
+    --exclude=".glovo/"
 )
 
 SKIP_REVIEW=0
@@ -256,7 +257,7 @@ cmd_deploy() {
 cmd_bootstrap() {
     log "Bootstrapping $SERVER"
 
-    ssh "$SERVER" "mkdir -p $REMOTE_DIR $REMOTE_DIR/workspace $REMOTE_DIR/files"
+    ssh "$SERVER" "mkdir -p $REMOTE_DIR $REMOTE_DIR/workspace $REMOTE_DIR/files $REMOTE_DIR/.glovo && chown -R claude:claude $REMOTE_DIR/.glovo"
 
     if ! ssh "$SERVER" "command -v /root/.local/bin/uv >/dev/null 2>&1"; then
         log "Installing uv"

@@ -7,9 +7,7 @@ from src.bot.services.telegram_ui import (
     MAX_MESSAGE_LENGTH,
     TelegramUI,
     ThreadRenderer,
-    _escape_md_v2,
     _markdown_to_html,
-    _strip_md_v2_escapes,
     build_renderer,
 )
 
@@ -59,26 +57,6 @@ def _settings_env(monkeypatch) -> None:
     monkeypatch.setenv("ALLOWED_CHAT_IDS", "1")
     monkeypatch.setenv("WORKING_DIRECTORY", "/tmp")
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
-
-
-def test_escape_md_v2_escapes_each_reserved_char_once() -> None:
-    # Arrange
-    reserved = "_*[]()~`>#+-=|{}.!\\"
-
-    # Act / Assert
-    for ch in reserved:
-        assert _escape_md_v2(ch) == "\\" + ch
-
-
-def test_escape_md_v2_leaves_plain_text_alone() -> None:
-    # Arrange / Act / Assert
-    assert _escape_md_v2("hello world 123") == "hello world 123"
-
-
-def test_escape_md_v2_escapes_mixed_content() -> None:
-    # Arrange / Act / Assert
-    assert _escape_md_v2("a.b") == "a\\.b"
-    assert _escape_md_v2("foo(bar)") == "foo\\(bar\\)"
 
 
 @pytest.mark.asyncio
@@ -208,18 +186,6 @@ def test_settings_accepts_legacy_streaming_modes(monkeypatch) -> None:
         assert settings.streaming_mode == mode
 
 
-def test_strip_md_v2_escapes_removes_backslashes() -> None:
-    # Arrange / Act / Assert
-    assert _strip_md_v2_escapes(r"hello\.world") == "hello.world"
-    assert _strip_md_v2_escapes(r"foo\(bar\)") == "foo(bar)"
-    assert _strip_md_v2_escapes(r"\*bold\*") == "*bold*"
-
-
-def test_strip_md_v2_escapes_preserves_non_escape_backslashes() -> None:
-    # Arrange / Act / Assert
-    assert _strip_md_v2_escapes("hello\\nworld") == "hello\\nworld"
-
-
 @pytest.mark.asyncio
 async def test_thread_renderer_on_text_is_noop(ui_bot) -> None:
     # Arrange
@@ -264,6 +230,36 @@ def test_markdown_to_html_does_not_double_escape_inside_code() -> None:
     # Inside `code`, < and > should be escaped once, not parsed as markdown
     result = _markdown_to_html("try `a < b`")
     assert "<code>a &lt; b</code>" in result
+
+
+def test_markdown_to_html_italic() -> None:
+    assert _markdown_to_html("_тихо_") == "<i>тихо</i>"
+    assert _markdown_to_html("hello _world_ end") == "hello <i>world</i> end"
+
+
+def test_markdown_to_html_italic_ignores_word_internal_underscores() -> None:
+    # Underscore inside an identifier must not become italic
+    assert _markdown_to_html("foo_bar_baz") == "foo_bar_baz"
+    assert _markdown_to_html("snake_case_var") == "snake_case_var"
+
+
+def test_markdown_to_html_italic_inside_code_stays_literal() -> None:
+    result = _markdown_to_html("see `_private_field`")
+    assert "<code>_private_field</code>" in result
+    assert "<i>" not in result
+
+
+def test_markdown_to_html_strikethrough() -> None:
+    assert _markdown_to_html("~~removed~~") == "<s>removed</s>"
+    assert _markdown_to_html("before ~~gone~~ after") == "before <s>gone</s> after"
+
+
+def test_markdown_to_html_list_passes_through() -> None:
+    # Telegram HTML has no list tag — markers stay as plain text
+    md = "Items:\n- first\n- second"
+    result = _markdown_to_html(md)
+    assert "- first" in result
+    assert "- second" in result
 
 
 def test_build_renderer_thread_returns_thread_renderer() -> None:
