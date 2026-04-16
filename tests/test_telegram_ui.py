@@ -8,6 +8,7 @@ from src.bot.services.telegram_ui import (
     TelegramUI,
     ThreadRenderer,
     _escape_md_v2,
+    _strip_md_v2_escapes,
     build_renderer,
 )
 
@@ -88,7 +89,7 @@ async def test_thread_renderer_appends_and_edits_in_place(ui_bot) -> None:
     # Act
     await renderer.on_thinking("thinking now")
     await renderer.on_tool("Read", {"file_path": "/a.py"})
-    await renderer.on_text("intermediate")
+    await renderer.on_tool("Grep", {"pattern": "test"})
     await renderer.finish()
 
     # Assert — exactly one initial send_message, at least one MarkdownV2 edit
@@ -103,10 +104,10 @@ async def test_thread_renderer_on_final_sends_new_message(ui_bot) -> None:
     renderer = ThreadRenderer(ui, chat_id=42)
 
     # Act
-    await renderer.on_text("step 1")
+    await renderer.on_tool("Read", {"file_path": "/a.py"})
     await renderer.on_final("final answer", 1500)
 
-    # Assert — 2 send_messages; final text present; cancel markup removed
+    # Assert — 2 send_messages: log + final; final text present; cancel markup removed
     assert len(bot.sends) == 2
     final_text = bot.sends[-1][1]
     assert "final answer" in final_text
@@ -153,11 +154,11 @@ async def test_thread_renderer_retries_plain_on_markdownv2_failure(ui_bot) -> No
     # Arrange
     ui, bot = ui_bot
     renderer = ThreadRenderer(ui, chat_id=42)
-    await renderer.on_text("first")  # creates log message
+    await renderer.on_tool("Read", {"file_path": "/a.py"})  # creates log message
     bot.edit_fail_count = 1  # next MarkdownV2 edit will raise
 
     # Act
-    await renderer.on_text("second")
+    await renderer.on_tool("Grep", {"pattern": "foo"})
     await renderer.finish()
 
     # Assert — no crash, and at least one edit was executed with parse_mode=None (plain retry)
@@ -174,7 +175,7 @@ async def test_thread_renderer_at_most_two_messages_end_to_end(ui_bot) -> None:
     # Act
     await renderer.on_thinking("pondering")
     await renderer.on_tool("Grep", {"pattern": "foo"})
-    await renderer.on_text("intermediate text")
+    await renderer.on_tool("Read", {"file_path": "/b.py"})
     await renderer.on_final("done", 0)
 
     # Assert — exactly one log message + one final message
@@ -201,6 +202,32 @@ def test_settings_accepts_legacy_streaming_modes(monkeypatch) -> None:
         monkeypatch.setenv("STREAMING_MODE", mode)
         settings = Settings(_env_file=None)
         assert settings.streaming_mode == mode
+
+
+def test_strip_md_v2_escapes_removes_backslashes() -> None:
+    # Arrange / Act / Assert
+    assert _strip_md_v2_escapes(r"hello\.world") == "hello.world"
+    assert _strip_md_v2_escapes(r"foo\(bar\)") == "foo(bar)"
+    assert _strip_md_v2_escapes(r"\*bold\*") == "*bold*"
+
+
+def test_strip_md_v2_escapes_preserves_non_escape_backslashes() -> None:
+    # Arrange / Act / Assert
+    assert _strip_md_v2_escapes("hello\\nworld") == "hello\\nworld"
+
+
+@pytest.mark.asyncio
+async def test_thread_renderer_on_text_is_noop(ui_bot) -> None:
+    # Arrange
+    ui, bot = ui_bot
+    renderer = ThreadRenderer(ui, chat_id=42)
+
+    # Act
+    await renderer.on_text("this should not appear in log")
+
+    # Assert — nothing sent, no lines accumulated
+    assert len(bot.sends) == 0
+    assert len(renderer._lines) == 0
 
 
 def test_build_renderer_thread_returns_thread_renderer() -> None:

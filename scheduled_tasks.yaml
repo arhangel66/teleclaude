@@ -1,5 +1,5 @@
 - name: daily_standup
-  schedule: "0 7 10 * *"
+  schedule: "0 7 * * *"
   timezone: Asia/Tbilisi
   prompt: "/morning-briefing"
   target: primary

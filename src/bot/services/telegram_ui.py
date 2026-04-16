@@ -26,6 +26,20 @@ def _escape_md_v2(text: str) -> str:
     return "".join("\\" + ch if ch in _MD_V2_RESERVED else ch for ch in text)
 
 
+def _strip_md_v2_escapes(text: str) -> str:
+    """Remove MarkdownV2 escape backslashes for plain-text fallback."""
+    result: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text) and text[i + 1] in _MD_V2_RESERVED:
+            result.append(text[i + 1])
+            i += 2
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
+
+
 def _assemble_blockquote(lines: list[str], truncated: bool) -> str:
     all_lines = ([TRUNCATION_MARKER] if truncated else []) + list(lines)
     if not all_lines:
@@ -175,7 +189,7 @@ class TelegramUI:
         )
         if not ok:
             logger.debug("MarkdownV2 edit failed for chat %d, retrying plain", chat_id)
-            await self.update_progress(chat_id, message_id, text)
+            await self.update_progress(chat_id, message_id, _strip_md_v2_escapes(text))
 
     async def send_step(
         self, chat_id: int, text: str, *, with_cancel: bool
@@ -372,10 +386,9 @@ class ThreadRenderer(StreamRenderer):
         self._pending: bool = False
 
     async def on_text(self, text: str) -> None:
-        snippet = text.strip().replace("\n", " ")
-        if snippet:
-            self._lines.append(_escape_md_v2(snippet))
-            await self._flush()
+        # Text events include the final answer fragments — skip them
+        # to avoid duplicating the answer in both the log and the final message.
+        pass
 
     async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None:
         self._lines.append(_escape_md_v2(_format_tool_line(tool_name, tool_input)))
@@ -415,7 +428,7 @@ class ThreadRenderer(StreamRenderer):
             except Exception:
                 logger.debug("MarkdownV2 send_progress failed, retrying plain")
                 self._message_id = await self._ui.send_progress(
-                    self._chat_id, body,
+                    self._chat_id, _strip_md_v2_escapes(body),
                 )
             self._last_edit = time.monotonic()
             self._pending = False
