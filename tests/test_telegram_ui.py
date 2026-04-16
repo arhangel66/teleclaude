@@ -121,7 +121,7 @@ async def test_thread_renderer_tail_trims_long_log(ui_bot) -> None:
     ui, bot = ui_bot
     renderer = ThreadRenderer(ui, chat_id=42)
     for i in range(200):
-        renderer._lines.append(_escape_md_v2(f"line {i} " + "x" * 100))
+        renderer._lines.append(f"line {i} " + "x" * 100)
 
     # Act
     await renderer._flush(force=True)
@@ -161,9 +161,13 @@ async def test_thread_renderer_retries_plain_on_markdownv2_failure(ui_bot) -> No
     await renderer.on_tool("Grep", {"pattern": "foo"})
     await renderer.finish()
 
-    # Assert — no crash, and at least one edit was executed with parse_mode=None (plain retry)
-    parse_modes = [e[3] for e in bot.edits]
-    assert None in parse_modes
+    # Assert — no crash, and at least one plain edit is clean of MarkdownV2 markup
+    plain_edits = [e[2] for e in bot.edits if e[3] is None]
+    assert plain_edits
+    for body in plain_edits:
+        assert "**>" not in body
+        assert "||" not in body
+        assert "\\" not in body
 
 
 @pytest.mark.asyncio

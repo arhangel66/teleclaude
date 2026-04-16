@@ -53,12 +53,32 @@ def _assemble_blockquote(lines: list[str], truncated: bool) -> str:
     return "\n".join("> " + ln for ln in all_lines)
 
 
+def _assemble_plain(lines: list[str], truncated: bool) -> str:
+    """Render log lines as plain text (no blockquote markup)."""
+    all_lines = ([TRUNCATION_MARKER] if truncated else []) + list(lines)
+    return "\n".join(all_lines)
+
+
 def _render_block(lines: list[str]) -> str:
-    """Render escaped log lines as a MarkdownV2 blockquote (tail-trims if oversize)."""
+    """Render raw log lines as a MarkdownV2 blockquote (tail-trims if oversize)."""
     work = list(lines)
     truncated = False
     while True:
-        body = _assemble_blockquote(work, truncated)
+        body = _assemble_blockquote([_escape_md_v2(ln) for ln in work], truncated)
+        if len(body) <= MAX_MESSAGE_LENGTH:
+            return body
+        if len(work) <= 1:
+            return body[:MAX_MESSAGE_LENGTH]
+        work = work[1:]
+        truncated = True
+
+
+def _render_block_plain(lines: list[str]) -> str:
+    """Render raw log lines as plain text (for fallback when MarkdownV2 fails)."""
+    work = list(lines)
+    truncated = False
+    while True:
+        body = _assemble_plain(work, truncated)
         if len(body) <= MAX_MESSAGE_LENGTH:
             return body
         if len(work) <= 1:
@@ -400,13 +420,13 @@ class ThreadRenderer(StreamRenderer):
         pass
 
     async def on_tool(self, tool_name: str, tool_input: dict | None = None) -> None:
-        self._lines.append(_escape_md_v2(_format_tool_line(tool_name, tool_input)))
+        self._lines.append(_format_tool_line(tool_name, tool_input))
         await self._flush()
 
     async def on_thinking(self, text: str) -> None:
         first_line = text.strip().splitlines()[0] if text.strip() else ""
         if first_line:
-            self._lines.append(_escape_md_v2(f"{THINKING_PREFIX}{first_line}"))
+            self._lines.append(f"{THINKING_PREFIX}{first_line}")
             await self._flush()
 
     async def on_final(self, text: str, context_tokens: int) -> None:
@@ -427,17 +447,18 @@ class ThreadRenderer(StreamRenderer):
     async def _flush(self, *, force: bool = False) -> None:
         if not self._lines:
             return
-        body = _render_block(self._lines)
+        body_md = _render_block(self._lines)
+        body_plain = _render_block_plain(self._lines)
 
         if self._message_id is None:
             try:
                 self._message_id = await self._ui.send_progress(
-                    self._chat_id, body, parse_mode="MarkdownV2",
+                    self._chat_id, body_md, parse_mode="MarkdownV2",
                 )
             except Exception:
                 logger.debug("MarkdownV2 send_progress failed, retrying plain")
                 self._message_id = await self._ui.send_progress(
-                    self._chat_id, _strip_md_v2_escapes(body),
+                    self._chat_id, body_plain,
                 )
             self._last_edit = time.monotonic()
             self._pending = False
@@ -445,7 +466,13 @@ class ThreadRenderer(StreamRenderer):
 
         now = time.monotonic()
         if force or now - self._last_edit >= THROTTLE_SECONDS:
-            await self._ui.update_progress_md(self._chat_id, self._message_id, body)
+            ok = await self._ui.update_progress(
+                self._chat_id, self._message_id, body_md, parse_mode="MarkdownV2",
+            )
+            if not ok:
+                await self._ui.update_progress(
+                    self._chat_id, self._message_id, body_plain,
+                )
             self._last_edit = now
             self._pending = False
         else:
