@@ -41,7 +41,7 @@ Run `claude` once interactively in the folder you plan to use as the bot's worki
 
 ### 3. (Optional) Get an OpenRouter API key
 
-Only needed if you want to send voice messages. Grab a key at [openrouter.ai/keys](https://openrouter.ai/keys). The default STT model is `google/gemini-2.5-flash` — cheap and multilingual.
+Only needed if you want to send voice messages. Grab a key at [openrouter.ai/keys](https://openrouter.ai/keys). The default STT model is `google/gemini-3-flash-preview` — cheap and multilingual.
 
 ### 4. Clone and configure
 

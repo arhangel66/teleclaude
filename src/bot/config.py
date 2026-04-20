@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     sqlite_db: str = "sessions.db"
 
     openrouter_api_key: str = ""
-    stt_model: str = "google/gemini-2.5-flash"
+    stt_model: str = "google/gemini-3-flash-preview"
     streaming_mode: Literal["verbose", "compact", "quiet", "thread"] = "thread"
     file_retention_days: int = 7
 
