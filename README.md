@@ -4,6 +4,8 @@ Telegram bot that bridges your chat into [Claude Code](https://docs.claude.com/e
 
 Think of it as a remote control for your personal Claude Code: you get the same agent you use in the terminal, but over Telegram from anywhere.
 
+![Demo — asking Claude to add pizza ingredients to a grocery basket](docs/screenshot.png)
+
 ## Features
 
 - Text, photo, voice (auto-transcribed), video, and document input
