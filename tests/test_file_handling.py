@@ -25,6 +25,9 @@ async def test_download_photo_saves_file(tmp_files_dir: Path) -> None:
     message.voice = None
     message.video = None
     message.video_note = None
+    message.animation = None
+    message.audio = None
+    message.sticker = None
     message.document = None
     message.caption = "Look at this"
 
@@ -55,6 +58,9 @@ async def test_download_returns_none_for_text_only() -> None:
     message.voice = None
     message.video = None
     message.video_note = None
+    message.animation = None
+    message.audio = None
+    message.sticker = None
     message.document = None
 
     # Act

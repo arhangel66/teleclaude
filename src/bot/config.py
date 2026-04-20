@@ -13,9 +13,10 @@ class Settings(BaseSettings):
     claude_binary: str = "claude"
     sqlite_db: str = "sessions.db"
 
-    openrouter_api_key: str
+    openrouter_api_key: str = ""
     stt_model: str = "google/gemini-2.5-flash"
     streaming_mode: Literal["verbose", "compact", "quiet", "thread"] = "thread"
+    file_retention_days: int = 7
 
     @field_validator("allowed_chat_ids", mode="before")
     @classmethod

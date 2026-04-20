@@ -4,6 +4,7 @@ from aiogram import Bot
 
 from src.bot.config import Settings
 from src.bot.services.claude_runner import ClaudeRunner
+from src.bot.services.file_cleaner import FileCleaner
 from src.bot.services.scheduler import TaskScheduler, load_tasks
 from src.bot.services.session_store import SessionStore
 from src.bot.services.telegram_ui import TelegramUI
@@ -26,4 +27,8 @@ task_scheduler = TaskScheduler(
     claude_runner=claude_runner,
     session_store=session_store,
     ui=telegram_ui,
+)
+file_cleaner = FileCleaner(
+    root=Path("files"),
+    max_age_days=settings.file_retention_days,
 )
