@@ -1,0 +1,28 @@
+# Optional scheduled tasks — copy to scheduled_tasks.yaml to enable.
+# Each entry fires a prompt into Claude Code on a cron schedule.
+#
+# Fields:
+#   name      — unique id for logs
+#   schedule  — standard 5-field crontab (minute hour day month weekday)
+#   timezone  — IANA tz (default: UTC)
+#   prompt    — what to send to Claude, as if you typed it in Telegram
+#   target    — primary (first chat in ALLOWED_CHAT_IDS) | all_sessions (every chat with a saved session)
+#   deliver   — final (send Claude's answer back) | silent (run but don't message)
+
+- name: morning-digest
+  schedule: "0 8 * * *"
+  timezone: Europe/Berlin
+  prompt: |
+    Give me a short morning digest:
+    - any PRs waiting on my review
+    - any Linear tickets due today
+    - weather for Berlin
+  target: primary
+  deliver: final
+
+- name: nightly-cleanup
+  schedule: "30 3 * * *"
+  timezone: UTC
+  prompt: "Run the project's nightly maintenance tasks if any, then exit quietly."
+  target: primary
+  deliver: silent

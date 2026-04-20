@@ -10,3 +10,4 @@ untracked/
 dist/
 build/
 .omc/
+scheduled_tasks.yaml

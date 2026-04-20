@@ -109,6 +109,33 @@ src/bot/
     task_runner.py     scheduled-task execution
 ```
 
+## Scheduled tasks (optional)
+
+You can have Claude run prompts on a cron schedule — morning digests, nightly maintenance, daily reminders, anything you'd normally type into the chat.
+
+Copy the template and edit it:
+
+```bash
+cp scheduled_tasks.example.yaml scheduled_tasks.yaml
+```
+
+Each entry is a crontab expression plus a prompt. Minimal example:
+
+```yaml
+- name: morning-digest
+  schedule: "0 8 * * *"
+  timezone: Europe/Berlin
+  prompt: "Summarize my PR review queue and Linear tickets due today."
+  target: primary      # primary | all_sessions
+  deliver: final       # final | silent
+```
+
+- `target: primary` — sends to the first id in `ALLOWED_CHAT_IDS`
+- `target: all_sessions` — sends to every chat that ever used the bot
+- `deliver: silent` — still runs Claude, but doesn't post the answer
+
+Tasks are loaded on startup. If `scheduled_tasks.yaml` doesn't exist, the bot runs without scheduling — totally fine.
+
 ## Running on a server
 
 There's no bundled deploy script — any long-running-process recipe works. Common options:
