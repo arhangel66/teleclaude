@@ -8,7 +8,7 @@ Think of it as a remote control for your personal Claude Code: you get the same 
 
 ## Why
 
-Built as a replacement for [Openclaw](https://openclaw.com/) after Anthropic blocked using Claude Code through third-party clients. You probably already have a Claude Code setup you love — with your own skills, MCP servers, project dirs, and login. TeleClaude exposes *that* setup over Telegram, without forcing you into someone else's client or a web UI you don't control. Native `claude` CLI stays the source of truth; Telegram is just the transport.
+Built as a replacement for [Openclaw](https://openclaw.ai/) after Anthropic blocked using Claude Code through third-party clients. You probably already have a Claude Code setup you love — with your own skills, MCP servers, project dirs, and login. TeleClaude exposes *that* setup over Telegram, without forcing you into someone else's client or a web UI you don't control. Native `claude` CLI stays the source of truth; Telegram is just the transport.
 
 ## Features
 
