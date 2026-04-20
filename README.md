@@ -6,6 +6,10 @@ Think of it as a remote control for your personal Claude Code: you get the same 
 
 ![Demo — asking Claude to add pizza ingredients to a grocery basket](docs/screenshot.png)
 
+## Why
+
+Built as a replacement for [Openclaw](https://openclaw.com/) after Anthropic blocked using Claude Code through third-party clients. You probably already have a Claude Code setup you love — with your own skills, MCP servers, project dirs, and login. TeleClaude exposes *that* setup over Telegram, without forcing you into someone else's client or a web UI you don't control. Native `claude` CLI stays the source of truth; Telegram is just the transport.
+
 ## Features
 
 - Text, photo, voice (auto-transcribed), video, and document input
