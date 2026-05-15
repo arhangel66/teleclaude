@@ -162,6 +162,7 @@ class ClaudeCliBackend:
 
 class CodexEventParser:
     _TOOL_TYPES = {"local_shell_call", "tool_call", "function_call"}
+    _START_TOOL_TYPES = {"command_execution", "mcp_tool_call", "file_change"}
     _THINKING_TYPES = {"reasoning", "thought", "thinking"}
 
     def __init__(self) -> None:
@@ -178,6 +179,14 @@ class CodexEventParser:
             session_id = data.get("thread_id") or thread_id
             if session_id:
                 return [SystemEvent(session_id=session_id)]
+
+        if event_type == "item.started":
+            item = data.get("item", {})
+            if not isinstance(item, dict):
+                return []
+            item_type = item.get("type", "")
+            if item_type in self._START_TOOL_TYPES:
+                return [self._tool_event_from_started_item(item, item_type)]
 
         if event_type == "item.completed":
             item = data.get("item", {})
@@ -226,6 +235,34 @@ class CodexEventParser:
             ]
 
         return []
+
+    def _tool_event_from_started_item(
+        self, item: dict[str, Any], item_type: str
+    ) -> ToolUseEvent:
+        if item_type == "command_execution":
+            return ToolUseEvent(
+                tool_name="Bash",
+                tool_input={"command": item.get("command", "")},
+            )
+        if item_type == "mcp_tool_call":
+            arguments = item.get("arguments")
+            tool_input = arguments if isinstance(arguments, dict) else {}
+            return ToolUseEvent(
+                tool_name=str(item.get("tool") or "mcp_tool_call"),
+                tool_input=tool_input,
+            )
+        if item_type == "file_change":
+            changes = item.get("changes")
+            path = ""
+            if isinstance(changes, list) and changes:
+                first = changes[0]
+                if isinstance(first, dict):
+                    path = str(first.get("path") or "")
+            return ToolUseEvent(
+                tool_name="Edit",
+                tool_input={"file_path": path, "changes": changes or []},
+            )
+        return ToolUseEvent(tool_name=item_type, tool_input={})
 
     def finalize(self) -> list[Event]:
         if self._last_agent_text is None or self._result_emitted:

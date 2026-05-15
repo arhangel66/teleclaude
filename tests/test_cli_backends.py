@@ -190,6 +190,66 @@ def test_codex_backend_normalizes_json_events() -> None:
     assert events[4].context_tokens == 13
 
 
+def test_codex_backend_normalizes_started_command_events() -> None:
+    # Arrange
+    parser = CodexCliBackend(
+        codex_binary="codex", working_directory="/work"
+    ).create_parser()
+
+    # Act
+    events = []
+    events.extend(
+        parser.parse(
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "command_execution",
+                    "command": "/bin/bash -lc pytest",
+                    "status": "in_progress",
+                },
+            }
+        )
+    )
+    events.extend(
+        parser.parse(
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "mcp_tool_call",
+                    "tool": "gmail_get_profile",
+                    "arguments": {},
+                },
+            }
+        )
+    )
+    events.extend(
+        parser.parse(
+            {
+                "type": "item.started",
+                "item": {
+                    "type": "file_change",
+                    "changes": [{"path": "/work/AGENTS.md", "kind": "edit"}],
+                },
+            }
+        )
+    )
+
+    # Assert
+    assert [type(event).__name__ for event in events] == [
+        "ToolUseEvent",
+        "ToolUseEvent",
+        "ToolUseEvent",
+    ]
+    assert isinstance(events[0], ToolUseEvent)
+    assert events[0].tool_name == "Bash"
+    assert events[0].tool_input["command"] == "/bin/bash -lc pytest"
+    assert isinstance(events[1], ToolUseEvent)
+    assert events[1].tool_name == "gmail_get_profile"
+    assert isinstance(events[2], ToolUseEvent)
+    assert events[2].tool_name == "Edit"
+    assert events[2].tool_input["file_path"] == "/work/AGENTS.md"
+
+
 def test_backends_ignore_unknown_raw_events() -> None:
     # Arrange
     claude_parser = ClaudeCliBackend(claude_binary="claude").create_parser()

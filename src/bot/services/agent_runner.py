@@ -9,6 +9,16 @@ from src.bot.services.runner_events import Event
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 600  # 10 minutes
+_SILENT_ITEM_TYPES = {"command_execution", "file_change", "mcp_tool_call"}
+
+
+def _is_known_silent_event(data: dict) -> bool:
+    if data.get("type") == "turn.started":
+        return True
+    if data.get("type") == "item.completed":
+        item = data.get("item")
+        return isinstance(item, dict) and item.get("type") in _SILENT_ITEM_TYPES
+    return False
 
 
 class AgentRunner:
@@ -116,5 +126,5 @@ class AgentRunner:
             if events:
                 for event in events:
                     yield event
-            else:
+            elif not _is_known_silent_event(data):
                 logger.debug("Unhandled event type: %s", data.get("type"))
