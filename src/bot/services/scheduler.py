@@ -101,7 +101,10 @@ class TaskScheduler:
             if not allowed:
                 return []
             return [allowed[0]]
-        return await self._session_store.list_chats()
+        backend = getattr(self._claude_runner, "backend_name", "claude")
+        if not isinstance(backend, str):
+            backend = "claude"
+        return await self._session_store.list_chats(backend=backend)
 
     async def _run(self, task: ScheduledTask) -> None:
         targets = await self._resolve_targets(task)

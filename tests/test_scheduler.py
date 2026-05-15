@@ -203,7 +203,7 @@ async def test_deliver_final_sends_to_telegram() -> None:
     )
 
     ui.send_final.assert_awaited_once_with(7, "done", 1234)
-    session_store.set.assert_awaited_once_with(7, "sess-1")
+    session_store.set.assert_awaited_once_with(7, "sess-1", backend="claude")
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import logging
 from typing import Literal
 
-from src.bot.services.claude_runner import (
+from src.bot.services.runner_events import (
     ResultEvent,
     SystemEvent,
     TextEvent,
@@ -26,7 +26,7 @@ async def run_prompt(
     start_typing: bool = True,
     renderer: StreamRenderer | None = None,
 ) -> None:
-    """Send a prompt to Claude for the given chat, resume session, stream events.
+    """Send a prompt to the selected agent for the chat and stream events.
 
     If `renderer` is provided, TextEvent/ToolUseEvent/ThinkingEvent are routed
     through it (interactive UX). If `renderer` is None, those events are
@@ -36,7 +36,10 @@ async def run_prompt(
       - 'final'  → ui.send_final(chat_id, text, tokens)
       - 'silent' → only log, nothing sent to Telegram
     """
-    session_id = await session_store.get(chat_id)
+    backend = getattr(claude_runner, "backend_name", "claude")
+    if not isinstance(backend, str):
+        backend = "claude"
+    session_id = await session_store.get(chat_id, backend=backend)
     if session_id is None:
         prompt = f"[chat_id={chat_id}]\n\n{prompt}"
 
@@ -48,7 +51,9 @@ async def run_prompt(
     try:
         async for event in claude_runner.run(prompt, chat_id, session_id):
             if isinstance(event, SystemEvent):
-                await session_store.set(chat_id, event.session_id)
+                await session_store.set(
+                    chat_id, event.session_id, backend=backend
+                )
             elif isinstance(event, TextEvent):
                 if renderer is not None:
                     await renderer.on_text(event.text)

@@ -9,8 +9,8 @@ from aiogram import Router, types
 from aiogram.filters import Command
 
 from src.bot.construct import (
+    agent_runner,
     bot,
-    claude_runner,
     session_store,
     settings,
     telegram_ui,
@@ -136,19 +136,19 @@ def _is_allowed(chat_id: int) -> bool:
 async def cmd_start(message: types.Message) -> None:
     if not _is_allowed(message.chat.id):
         return
-    await message.answer("Claude Code bridge is ready. Send me a message.")
+    await message.answer("CLI agent bridge is ready. Send me a message.")
 
 
 @router.message(Command("new"))
 async def cmd_new(message: types.Message) -> None:
     if not _is_allowed(message.chat.id):
         return
-    await session_store.reset(message.chat.id)
+    await session_store.reset(message.chat.id, backend=agent_runner.backend_name)
     await message.answer("New session started.")
 
 
 async def _build_prompt(message: types.Message) -> str | None:
-    """Resolve the message into a Claude prompt. Returns None if unusable."""
+    """Resolve the message into an agent prompt. Returns None if unusable."""
     attachment, caption = await _attach_or_none(message)
     metadata = _extract_metadata(message)
     text = message.text or caption or ""
@@ -218,7 +218,7 @@ async def on_message(message: types.Message) -> None:
             await run_prompt(
                 chat_id,
                 prompt,
-                claude_runner=claude_runner,
+                claude_runner=agent_runner,
                 session_store=session_store,
                 ui=telegram_ui,
                 deliver="final",
@@ -237,7 +237,7 @@ async def on_cancel(callback: types.CallbackQuery) -> None:
         await callback.answer()
         return
 
-    cancelled = await claude_runner.cancel(chat_id)
+    cancelled = await agent_runner.cancel(chat_id)
     if cancelled:
         await callback.answer("Operation cancelled.")
         if callback.message:

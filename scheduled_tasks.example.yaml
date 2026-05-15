@@ -1,13 +1,13 @@
 # Optional scheduled tasks — copy to scheduled_tasks.yaml to enable.
-# Each entry fires a prompt into Claude Code on a cron schedule.
+# Each entry fires a prompt into the selected CLI backend on a cron schedule.
 #
 # Fields:
 #   name      — unique id for logs
 #   schedule  — standard 5-field crontab (minute hour day month weekday)
 #   timezone  — IANA tz (default: UTC)
-#   prompt    — what to send to Claude, as if you typed it in Telegram
+#   prompt    — what to send to the selected agent, as if you typed it in Telegram
 #   target    — primary (first chat in ALLOWED_CHAT_IDS) | all_sessions (every chat with a saved session)
-#   deliver   — final (send Claude's answer back) | silent (run but don't message)
+#   deliver   — final (send the answer back) | silent (run but don't message)
 
 - name: morning-digest
   schedule: "0 8 * * *"

@@ -10,7 +10,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     allowed_chat_ids: list[int]
     working_directory: str
+    agent_backend: Literal["claude", "codex"] = "claude"
     claude_binary: str = "claude"
+    codex_binary: str = "codex"
     sqlite_db: str = "sessions.db"
 
     openrouter_api_key: str = ""

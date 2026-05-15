@@ -1,7 +1,7 @@
 [project]
 name = "teleclaude"
 version = "0.1.0"
-description = "Telegram bridge to Claude Code CLI"
+description = "Telegram bridge to Claude and Codex CLI agents"
 requires-python = ">=3.13"
 dependencies = [
     "aiogram>=3.27.0",
