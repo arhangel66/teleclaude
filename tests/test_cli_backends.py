@@ -187,7 +187,40 @@ def test_codex_backend_normalizes_json_events() -> None:
     assert events[3].text == "answer"
     assert isinstance(events[4], ResultEvent)
     assert events[4].text == "answer"
-    assert events[4].context_tokens == 13
+    assert events[4].context_tokens == 11
+
+
+def test_codex_backend_does_not_double_count_cached_input_tokens() -> None:
+    # Arrange
+    parser = CodexCliBackend(
+        codex_binary="codex", working_directory="/work"
+    ).create_parser()
+
+    # Act
+    events = []
+    events.extend(
+        parser.parse(
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "answer"},
+            }
+        )
+    )
+    events.extend(
+        parser.parse(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1_278_750,
+                    "cached_input_tokens": 1_167_232,
+                },
+            }
+        )
+    )
+
+    # Assert
+    assert isinstance(events[-1], ResultEvent)
+    assert events[-1].context_tokens == 1_278_750
 
 
 def test_codex_backend_normalizes_started_command_events() -> None:
