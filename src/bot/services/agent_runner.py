@@ -9,6 +9,7 @@ from src.bot.services.runner_events import Event
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 600  # 10 minutes
+STREAM_LIMIT_BYTES = 16 * 1024 * 1024
 _SILENT_ITEM_TYPES = {"command_execution", "file_change", "mcp_tool_call"}
 
 
@@ -51,6 +52,7 @@ class AgentRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._cwd,
+            limit=STREAM_LIMIT_BYTES,
         )
         self._active[chat_id] = proc
 
