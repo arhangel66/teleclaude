@@ -227,7 +227,7 @@ async def test_deliver_silent_does_not_send_to_telegram(caplog) -> None:
     with caplog.at_level(logging.INFO, logger="src.bot.services.task_runner"):
         await run_prompt(
             chat_id=9,
-            prompt="/compact",
+            prompt="/daily-standup",
             claude_runner=claude_runner,
             session_store=session_store,
             ui=ui,
