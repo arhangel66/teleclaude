@@ -51,19 +51,6 @@ def _context_tokens(usage: Any) -> int:
     )
 
 
-def _codex_context_tokens(usage: Any) -> int:
-    if not isinstance(usage, dict):
-        return 0
-    if "input_tokens" in usage:
-        return _int_value(usage.get("input_tokens"))
-    if "input_context_tokens" in usage:
-        return _int_value(usage.get("input_context_tokens"))
-    return (
-        _int_value(usage.get("cache_read_input_tokens"))
-        + _int_value(usage.get("cache_creation_input_tokens"))
-    )
-
-
 def _content_text(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -180,7 +167,6 @@ class CodexEventParser:
 
     def __init__(self) -> None:
         self._last_agent_text: str | None = None
-        self._last_context_tokens = 0
         self._result_emitted = False
 
     def parse(self, data: dict[str, Any]) -> list[Event]:
@@ -233,17 +219,13 @@ class CodexEventParser:
                 return [ToolUseEvent(tool_name=tool_name, tool_input=tool_input)]
 
         if event_type == "turn.completed":
-            turn = data.get("turn", {})
-            turn_usage = turn.get("usage", {}) if isinstance(turn, dict) else {}
-            usage = data.get("usage") or turn_usage
-            self._last_context_tokens = _codex_context_tokens(usage)
             if self._last_agent_text is None:
                 return []
             self._result_emitted = True
             return [
                 ResultEvent(
                     text=self._last_agent_text.strip(),
-                    context_tokens=self._last_context_tokens,
+                    context_tokens=0,
                 )
             ]
 
@@ -284,7 +266,7 @@ class CodexEventParser:
         return [
             ResultEvent(
                 text=self._last_agent_text.strip(),
-                context_tokens=self._last_context_tokens,
+                context_tokens=0,
             )
         ]
 
