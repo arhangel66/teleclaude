@@ -1,4 +1,10 @@
-from src.bot.services.cli_backends import ClaudeCliBackend, CodexCliBackend
+import json
+
+from src.bot.services.cli_backends import (
+    ClaudeCliBackend,
+    CodexCliBackend,
+    _latest_codex_session_context_tokens,
+)
 from src.bot.services.runner_events import (
     ResultEvent,
     SystemEvent,
@@ -187,10 +193,10 @@ def test_codex_backend_normalizes_json_events() -> None:
     assert events[3].text == "answer"
     assert isinstance(events[4], ResultEvent)
     assert events[4].text == "answer"
-    assert events[4].context_tokens == 0
+    assert events[4].context_tokens == 9
 
 
-def test_codex_backend_does_not_report_usage_as_context_tokens() -> None:
+def test_codex_backend_estimates_context_tokens_from_cached_usage() -> None:
     # Arrange
     parser = CodexCliBackend(
         codex_binary="codex", working_directory="/work"
@@ -220,7 +226,72 @@ def test_codex_backend_does_not_report_usage_as_context_tokens() -> None:
 
     # Assert
     assert isinstance(events[-1], ResultEvent)
-    assert events[-1].context_tokens == 0
+    assert events[-1].context_tokens == 200_003
+
+
+def test_codex_backend_uses_session_last_token_usage(
+    tmp_path, monkeypatch
+) -> None:
+    # Arrange
+    codex_home = tmp_path / ".codex"
+    session_dir = codex_home / "sessions" / "2026" / "05" / "15"
+    session_dir.mkdir(parents=True)
+    session_file = session_dir / "rollout-test-thread-1.jsonl"
+    session_file.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "event_msg", "payload": {"type": "token_count"}}),
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "last_token_usage": {
+                                    "input_tokens": 91_901,
+                                    "cached_input_tokens": 91_008,
+                                },
+                                "model_context_window": 258_400,
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setattr("src.bot.services.cli_backends.Path.home", lambda: tmp_path)
+    parser = CodexCliBackend(
+        codex_binary="codex", working_directory="/work"
+    ).create_parser()
+
+    # Act
+    events = []
+    events.extend(parser.parse({"type": "thread.started", "thread_id": "thread-1"}))
+    events.extend(
+        parser.parse(
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "answer"},
+            }
+        )
+    )
+    events.extend(
+        parser.parse(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 2_716_995,
+                    "cached_input_tokens": 2_516_992,
+                },
+            }
+        )
+    )
+
+    # Assert
+    assert _latest_codex_session_context_tokens("thread-1", codex_home) == 91_901
+    assert isinstance(events[-1], ResultEvent)
+    assert events[-1].context_tokens == 91_901
 
 
 def test_codex_backend_normalizes_started_command_events() -> None:

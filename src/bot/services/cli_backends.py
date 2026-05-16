@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from collections import deque
+from pathlib import Path
 from typing import Any, Protocol
 
 from src.bot.services.runner_events import (
@@ -10,6 +13,8 @@ from src.bot.services.runner_events import (
     ThinkingEvent,
     ToolUseEvent,
 )
+
+CODEX_DEFAULT_CONTEXT_WINDOW = 258_400
 
 
 class EventParser(Protocol):
@@ -49,6 +54,81 @@ def _context_tokens(usage: Any) -> int:
         + _int_value(usage.get("cache_read_input_tokens"))
         + _int_value(usage.get("cache_creation_input_tokens"))
     )
+
+
+def _clamp_context_tokens(tokens: int, context_window: int) -> int:
+    if tokens <= 0:
+        return 0
+    if context_window <= 0:
+        return tokens
+    return min(tokens, context_window)
+
+
+def _codex_usage_context_tokens(
+    usage: Any, context_window: int = CODEX_DEFAULT_CONTEXT_WINDOW
+) -> int:
+    if not isinstance(usage, dict):
+        return 0
+    if "last_token_usage" in usage and isinstance(usage["last_token_usage"], dict):
+        tokens = _int_value(usage["last_token_usage"].get("input_tokens"))
+        return _clamp_context_tokens(tokens, context_window)
+    if "input_context_tokens" in usage:
+        tokens = _int_value(usage.get("input_context_tokens"))
+        return _clamp_context_tokens(tokens, context_window)
+    if "input_tokens" in usage and "cached_input_tokens" in usage:
+        tokens = _int_value(usage.get("input_tokens")) - _int_value(
+            usage.get("cached_input_tokens")
+        )
+        return _clamp_context_tokens(tokens, context_window)
+    if "input_tokens" in usage:
+        tokens = _int_value(usage.get("input_tokens"))
+        return _clamp_context_tokens(tokens, context_window)
+    return 0
+
+
+def _latest_codex_session_context_tokens(
+    session_id: str, codex_home: Path | None = None
+) -> int:
+    if not session_id:
+        return 0
+    root = (codex_home or Path.home() / ".codex") / "sessions"
+    if not root.exists():
+        return 0
+
+    matches = sorted(root.rglob(f"*{session_id}.jsonl"))
+    if not matches:
+        return 0
+    path = matches[-1]
+
+    try:
+        with path.open(encoding="utf-8") as f:
+            tail = deque(f, maxlen=300)
+    except OSError:
+        return 0
+
+    for line in reversed(tail):
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if data.get("type") != "event_msg":
+            continue
+        payload = data.get("payload", {})
+        if not isinstance(payload, dict) or payload.get("type") != "token_count":
+            continue
+        info = payload.get("info")
+        if not isinstance(info, dict):
+            continue
+        context_window = _int_value(
+            info.get("model_context_window") or CODEX_DEFAULT_CONTEXT_WINDOW
+        )
+        usage = info.get("last_token_usage")
+        if isinstance(usage, dict):
+            tokens = _int_value(usage.get("input_tokens"))
+            return _clamp_context_tokens(tokens, context_window)
+        return 0
+
+    return 0
 
 
 def _content_text(value: Any) -> str:
@@ -166,6 +246,7 @@ class CodexEventParser:
     _THINKING_TYPES = {"reasoning", "thought", "thinking"}
 
     def __init__(self) -> None:
+        self._session_id: str | None = None
         self._last_agent_text: str | None = None
         self._result_emitted = False
 
@@ -177,6 +258,7 @@ class CodexEventParser:
             thread_id = thread.get("id") if isinstance(thread, dict) else None
             session_id = data.get("thread_id") or thread_id
             if session_id:
+                self._session_id = str(session_id)
                 return [SystemEvent(session_id=session_id)]
 
         if event_type == "item.started":
@@ -221,11 +303,19 @@ class CodexEventParser:
         if event_type == "turn.completed":
             if self._last_agent_text is None:
                 return []
+            turn = data.get("turn", {})
+            turn_usage = turn.get("usage", {}) if isinstance(turn, dict) else {}
+            usage = data.get("usage") or turn_usage
+            context_tokens = _latest_codex_session_context_tokens(
+                self._session_id or ""
+            )
+            if context_tokens == 0:
+                context_tokens = _codex_usage_context_tokens(usage)
             self._result_emitted = True
             return [
                 ResultEvent(
                     text=self._last_agent_text.strip(),
-                    context_tokens=0,
+                    context_tokens=context_tokens,
                 )
             ]
 
